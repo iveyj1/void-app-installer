@@ -1,0 +1,3 @@
+# Optional development/automation utilities found on the p6 installation
+cloc
+expect

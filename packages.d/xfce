@@ -1,0 +1,9 @@
+# Optional Xfce desktop and Plasma/Breeze appearance
+xfce4
+breeze-gtk
+breeze-icons
+breeze-qt5
+breeze-qt6
+xfce4-whiskermenu-plugin
+xfce4-docklike-plugin
+xfce4-pulseaudio-plugin

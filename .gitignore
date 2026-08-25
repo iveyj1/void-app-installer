@@ -1,0 +1,6 @@
+# Local scratch/secrets; do not commit Wi-Fi passwords or generated configs.
+*.secret
+*.local
+.env
+secrets/
+tmp/

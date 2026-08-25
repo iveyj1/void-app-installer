@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Manual Void Wi-Fi repair for wpa_supplicant + dhcpcd systems.
+# This is intentionally a repair tool, not the normal boot path.
+set -euo pipefail
+
+IFACE=${VOID_WIFI_IFACE:-${IFACE:-}}
+CONF=${VOID_WIFI_CONF:-/etc/wpa_supplicant/wpa_supplicant.conf}
+
+if [[ -z $IFACE ]]; then
+    if command -v iw >/dev/null 2>&1; then
+        IFACE=$(iw dev 2>/dev/null | awk '$1 == "Interface" { print $2; exit }')
+    fi
+    [[ -n $IFACE ]] || IFACE=$(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^wl/ { print $2; exit }')
+fi
+
+[[ -n $IFACE ]] || { echo "No Wi-Fi interface found; set VOID_WIFI_IFACE." >&2; exit 1; }
+[[ -s $CONF ]] || { echo "Missing $CONF; configure wpa_supplicant first." >&2; exit 1; }
+
+sudo true
+sudo rfkill unblock wifi 2>/dev/null || true
+sudo sv stop dhcpcd 2>/dev/null || true
+sudo sv stop wpa_supplicant 2>/dev/null || true
+sudo pkill dhcpcd 2>/dev/null || true
+sudo pkill wpa_supplicant 2>/dev/null || true
+sudo rm -rf /run/wpa_supplicant
+sudo ip link set "$IFACE" down 2>/dev/null || true
+sudo ip addr flush dev "$IFACE" 2>/dev/null || true
+sudo ip link set "$IFACE" up
+sudo iw dev "$IFACE" set power_save off 2>/dev/null || true
+
+sudo ln -s /etc/sv/wpa_supplicant /var/service/wpa_supplicant 2>/dev/null || true
+sudo ln -s /etc/sv/dhcpcd /var/service/dhcpcd 2>/dev/null || true
+sudo sv start wpa_supplicant
+sleep 5
+sudo sv start dhcpcd
+sleep 10
+
+sudo sv status wpa_supplicant dhcpcd || true
+sudo iw dev "$IFACE" link || true
+ip -br addr show dev "$IFACE" || true
+ip route | sed -n '1,5p' || true

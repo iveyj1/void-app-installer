@@ -1,0 +1,87 @@
+#!/bin/sh
+# Capture a quick Wi-Fi/network diagnostic snapshot before the problem recovers.
+
+IFACE=${IFACE:-wlp0s20f3}
+ROUTER=${ROUTER:-10.0.0.1}
+TARGET=${TARGET:-1.1.1.1}
+LOGDIR=${LOGDIR:-$HOME/.local/share/wifi-diag}
+TS=$(date '+%Y%m%d-%H%M%S')
+OUT="$LOGDIR/wifi-diag-$TS.log"
+
+mkdir -p "$LOGDIR" || exit 1
+
+run() {
+    printf '\n===== %s =====\n' "$*"
+    "$@" 2>&1
+    rc=$?
+    printf '%s\n' "----- rc=$rc -----"
+}
+
+run_sh() {
+    title=$1
+    shift
+    printf '\n===== %s =====\n' "$title"
+    sh -c "$*" 2>&1
+    rc=$?
+    printf '%s\n' "----- rc=$rc -----"
+}
+
+maybe_sudo() {
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        sudo "$@"
+    else
+        "$@"
+    fi
+}
+
+{
+    echo "wifi-diag snapshot"
+    echo "timestamp_local=$(date '+%Y-%m-%d %H:%M:%S %z')"
+    echo "timestamp_utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "host=$(hostname)"
+    echo "iface=$IFACE router=$ROUTER target=$TARGET"
+    echo "user=$(id)"
+
+    run uname -a
+    run uptime
+
+    run_sh "rfkill" "rfkill list 2>/dev/null || true"
+    run ip -br link
+    run ip -br addr
+    run ip route
+    run_sh "resolv.conf" "cat /etc/resolv.conf 2>/dev/null || true"
+
+    run_sh "iw link" "iw dev '$IFACE' link 2>/dev/null || true"
+    run_sh "iw power_save" "iw dev '$IFACE' get power_save 2>/dev/null || true"
+    run_sh "iw station dump" "iw dev '$IFACE' station dump 2>/dev/null || true"
+
+    run_sh "power supply / charger state" "for d in /sys/class/power_supply/*; do echo ===\$d; for f in type online status capacity scope voltage_now current_now power_now charge_now model_name manufacturer; do [ -r \"\$d/\$f\" ] && printf '%s=' \"\$f\" && cat \"\$d/\$f\"; done; done"
+    run_sh "intel wifi module power params" "for f in /sys/module/iwlwifi/parameters/power_save /sys/module/iwlwifi/parameters/power_level /sys/module/iwlwifi/parameters/uapsd_disable /sys/module/iwlmvm/parameters/power_scheme; do [ -r \"\$f\" ] && echo -n \"\$f=\" && cat \"\$f\"; done"
+    run_sh "wifi PCI runtime PM" "for f in /sys/bus/pci/devices/0000:00:14.3/power/control /sys/bus/pci/devices/0000:00:14.3/power/runtime_status /sys/bus/pci/devices/0000:00:14.3/power/runtime_suspended_time /sys/bus/pci/devices/0000:00:14.3/power/runtime_active_time; do [ -r \"\$f\" ] && echo -n \"\$f=\" && cat \"\$f\" 2>/dev/null; done"
+
+    run_sh "interface counters" "grep -H . /sys/class/net/'$IFACE'/statistics/* 2>/dev/null | sed 's#.*/##' || true"
+
+    run_sh "processes" "ps -eo pid,ppid,stat,etime,args | grep -Ei 'wpa_supplicant|dhcpcd|wifi-watchdog|tlp|power-profiles|upower|powertop' | grep -v grep || true"
+
+    printf '\n===== runit service status =====\n'
+    maybe_sudo sv status wifi-watchdog wpa_supplicant dhcpcd 2>&1
+    rc=$?
+    printf '%s\n' "----- rc=$rc -----"
+
+    run_sh "ping router $ROUTER" "ping -n -I '$IFACE' -c 5 -W 2 '$ROUTER' 2>&1 || true"
+    run_sh "ping internet $TARGET" "ping -n -I '$IFACE' -c 5 -W 2 '$TARGET' 2>&1 || true"
+    run_sh "ping DNS name" "ping -n -I '$IFACE' -c 3 -W 2 example.com 2>&1 || true"
+
+    run_sh "ARP/neigh" "ip neigh show dev '$IFACE' 2>/dev/null || true"
+
+    run_sh "wifi-watchdog log tail" "tail -80 /var/log/wifi-watchdog.log 2>/dev/null || true"
+    run_sh "kernel dmesg tail if permitted" "dmesg 2>/dev/null | grep -Ei 'wlp|wlan|iwlwifi|deauth|disassoc|firmware|wifi' | tail -80 || true"
+
+    run_sh "pingstat recent summary" "test -x '$HOME/.local/bin/pingstat' && '$HOME/.local/bin/pingstat' show --last 30m 2>/dev/null || true"
+
+    echo
+    echo "saved=$OUT"
+} > "$OUT" 2>&1
+
+cat "$OUT"
+printf '\nSaved diagnostic snapshot to: %s\n' "$OUT" >&2

@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Install one or more package groups used by install-void-apps.
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+usage() {
+    cat <<'EOF'
+Usage: install-void-package-groups GROUP...
+
+Groups:
+  core       Command-line tools, networking, dwm/XLibre, audio, and common utilities
+  xfce       Xfce and the Breeze/Plasma-style desktop packages
+  cad        FreeCAD, KiCad, and OpenSCAD
+  network    CIFS and Samba tools (does not enable or configure services)
+  extras     cloc and expect; install-void-apps also installs Pi when selected
+  all        All of the above
+EOF
+}
+
+(($#)) || { usage >&2; exit 2; }
+
+declare -a groups=()
+for group in "$@"; do
+    group=${group#--}
+    case $group in
+        all) groups+=(core xfce cad network extras) ;;
+        core|xfce|cad|network|extras) groups+=("$group") ;;
+        -h|help) usage; exit 0 ;;
+        *) echo "Unknown package group: $group" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+declare -a packages=()
+for group in "${groups[@]}"; do
+    file=$SCRIPT_DIR/packages.d/$group
+    [[ -f $file ]] || { echo "Missing package group file: $file" >&2; exit 1; }
+    while IFS= read -r package || [[ -n $package ]]; do
+        package=${package%%#*}
+        package=${package//[[:space:]]/}
+        [[ -n $package ]] && packages+=("$package")
+    done < "$file"
+done
+
+((${#packages[@]})) || { echo "No packages selected" >&2; exit 1; }
+sudo xbps-install -Sy "${packages[@]}"

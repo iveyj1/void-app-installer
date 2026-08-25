@@ -1,0 +1,3 @@
+# Optional network filesystem and Samba tools; services are not enabled
+cifs-utils
+samba

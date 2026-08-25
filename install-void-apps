@@ -1,0 +1,389 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SUCKLESS_DIR=${SUCKLESS_DIR:-"$HOME/suckless"}
+INSTALL_XFCE=0
+INSTALL_CAD=0
+INSTALL_NETWORK=0
+INSTALL_EXTRAS=0
+VOID_GIT_USER_NAME=${VOID_GIT_USER_NAME:-}
+VOID_GIT_USER_EMAIL=${VOID_GIT_USER_EMAIL:-}
+VOID_WIFI_IFACE=${VOID_WIFI_IFACE:-}
+VOID_WIFI_CONF=${VOID_WIFI_CONF:-/etc/wpa_supplicant/wpa_supplicant.conf}
+VOID_WIFI_DNS=${VOID_WIFI_DNS:-1.1.1.1}
+
+usage() {
+    cat <<'EOF'
+Usage: install-void-apps [OPTIONS]
+
+The default installation provides the command-line tools, dwm/XLibre, audio,
+fonts, networking basics, and common utilities. Optional package groups:
+  --xfce       Xfce with the Plasma/Breeze appearance packages
+  --cad        FreeCAD, KiCad, OpenSCAD, and PrusaSlicer
+  --network    CIFS and Samba packages (services are not enabled)
+  --extras     cloc, expect, and Pi coding agent
+  --all        Enable every optional group
+
+Wi-Fi bootstrap environment variables:
+  VOID_WIFI_SSID   Create /etc/wpa_supplicant/wpa_supplicant.conf for this SSID
+  VOID_WIFI_PSK    Passphrase for VOID_WIFI_SSID; not stored in this repository
+  VOID_WIFI_IFACE  Override auto-detected Wi-Fi interface
+  VOID_WIFI_DNS    Resolver prepended by dhcpcd, default: 1.1.1.1
+  VOID_GIT_USER_NAME   Optional global git user.name
+  VOID_GIT_USER_EMAIL  Optional global git user.email
+EOF
+}
+
+while (($#)); do
+    case $1 in
+        --xfce) INSTALL_XFCE=1 ;;
+        --cad) INSTALL_CAD=1 ;;
+        --network) INSTALL_NETWORK=1 ;;
+        --extras) INSTALL_EXTRAS=1 ;;
+        --all) INSTALL_XFCE=1; INSTALL_CAD=1; INSTALL_NETWORK=1; INSTALL_EXTRAS=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+install_xlibre_repository() {
+    local config=/etc/xbps.d/99-repository-xlibre.conf
+    local repository='repository=https://github.com/xlibre-void/xlibre/releases/latest/download'
+
+    if [[ ! -f $config ]] || ! grep -Fqx "$repository" "$config"; then
+        echo "Adding the XLibre repository"
+        sudo install -d -m 755 /etc/xbps.d
+        printf '%s\n' "$repository" | sudo tee "$config" >/dev/null
+    fi
+}
+
+detect_wifi_iface() {
+    if [[ -n $VOID_WIFI_IFACE ]]; then
+        printf '%s\n' "$VOID_WIFI_IFACE"
+        return
+    fi
+    if command -v iw >/dev/null 2>&1; then
+        iw dev 2>/dev/null | awk '$1 == "Interface" { print $2; exit }'
+        return
+    fi
+    ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^wl/ { print $2; exit }'
+}
+
+wpa_quote() {
+    local value=$1
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    printf '"%s"' "$value"
+}
+
+configure_void_networking() {
+    local iface
+    iface=$(detect_wifi_iface || true)
+
+    sudo install -d -m 755 /etc/wpa_supplicant /etc/xbps.d
+
+    if [[ ! -s $VOID_WIFI_CONF && -n ${VOID_WIFI_SSID:-} && -n ${VOID_WIFI_PSK:-} ]]; then
+        echo "Creating $VOID_WIFI_CONF for SSID $VOID_WIFI_SSID"
+        if command -v wpa_passphrase >/dev/null 2>&1; then
+            {
+                printf '%s\n' \
+                    'ctrl_interface=/run/wpa_supplicant' \
+                    'ctrl_interface_group=wheel' \
+                    'update_config=1' \
+                    ''
+                printf '%s\n' "$VOID_WIFI_PSK" | wpa_passphrase "$VOID_WIFI_SSID"
+            } | sudo tee "$VOID_WIFI_CONF" >/dev/null
+        else
+            sudo tee "$VOID_WIFI_CONF" >/dev/null <<EOF
+ctrl_interface=/run/wpa_supplicant
+ctrl_interface_group=wheel
+update_config=1
+
+network={
+    ssid=$(wpa_quote "$VOID_WIFI_SSID")
+    psk=$(wpa_quote "$VOID_WIFI_PSK")
+}
+EOF
+        fi
+        sudo chmod 600 "$VOID_WIFI_CONF"
+    elif [[ ! -s $VOID_WIFI_CONF ]]; then
+        echo "No $VOID_WIFI_CONF yet; set VOID_WIFI_SSID and VOID_WIFI_PSK to let this installer create it."
+    fi
+
+    if [[ -n $iface ]]; then
+        if [[ -d /etc/sv/wpa_supplicant ]]; then
+            sudo tee /etc/sv/wpa_supplicant/conf >/dev/null <<EOF
+WPA_INTERFACE=$iface
+CONF_FILE=$VOID_WIFI_CONF
+DRIVER=nl80211
+EOF
+        fi
+        sudo rfkill unblock wifi 2>/dev/null || true
+        sudo ip link set "$iface" up 2>/dev/null || true
+        sudo iw dev "$iface" set power_save off 2>/dev/null || true
+    else
+        echo "No Wi-Fi interface detected yet; networking services will still be enabled."
+    fi
+
+    # Prefer a public resolver while retaining DHCP-provided nameservers below it.
+    printf '%s\n' \
+        '# Installed by install-void-apps: prefer reliable DNS over router proxy.' \
+        "nameserver $VOID_WIFI_DNS" |
+        sudo tee /etc/resolv.conf.head >/dev/null
+
+    # Persistent Intel Wi-Fi power settings. Harmless on non-Intel systems.
+    sudo install -d -m 755 /etc/modprobe.d
+    sudo tee /etc/modprobe.d/iwlwifi-no-power-save.conf >/dev/null <<'EOF'
+# Installed by install-void-apps: avoid missed beacons/DHCP stalls on Intel Wi-Fi.
+options iwlwifi power_save=0 power_level=0 uapsd_disable=3
+options iwlmvm power_scheme=1
+EOF
+
+    local service
+    for service in wpa_supplicant dhcpcd; do
+        if [[ -d /etc/sv/$service && ! -e /var/service/$service ]]; then
+            sudo ln -s "/etc/sv/$service" "/var/service/$service"
+        fi
+    done
+    [[ -d /etc/sv/wpa_supplicant ]] && sudo sv up wpa_supplicant 2>/dev/null || true
+    [[ -d /etc/sv/dhcpcd ]] && sudo sv up dhcpcd 2>/dev/null || true
+}
+
+install_package_groups() {
+    local -a groups=(core)
+    ((INSTALL_XFCE)) && groups+=(xfce)
+    ((INSTALL_CAD)) && groups+=(cad)
+    ((INSTALL_NETWORK)) && groups+=(network)
+    ((INSTALL_EXTRAS)) && groups+=(extras)
+
+    # Void may require XBPS to be upgraded in a separate transaction.
+    sudo xbps-install -Syu xbps
+    sudo xbps-install -Syu
+    "$SCRIPT_DIR/install-void-package-groups" "${groups[@]}"
+}
+
+configure_console_font() {
+    local config=/etc/rc.conf
+    # Persist the font for every virtual console. Merely calling setfont here
+    # changes only the current console and is lost at reboot.
+    if grep -q '^FONT=' "$config"; then
+        sudo sed -i 's/^FONT=.*/FONT="ter-124n"/' "$config"
+    else
+        printf '\n# Installed by install-void-apps.\nFONT="ter-124n"\n' |
+            sudo tee -a "$config" >/dev/null
+    fi
+
+    if [[ $(tty 2>/dev/null || true) == /dev/tty* ]]; then
+        sudo setfont ter-124n
+    fi
+}
+
+configure_services() {
+    if [[ ! -e /var/service/dbus ]]; then
+        sudo ln -s /etc/sv/dbus /var/service/dbus
+    fi
+    sudo sv up dbus || true
+
+    # PipeWire runs in the user's graphical session. These drop-ins make it
+    # launch WirePlumber and the PulseAudio-compatible server with PipeWire.
+    sudo install -d -m 755 /etc/pipewire/pipewire.conf.d /etc/alsa/conf.d
+    sudo ln -sf /usr/share/examples/wireplumber/10-wireplumber.conf \
+        /etc/pipewire/pipewire.conf.d/10-wireplumber.conf
+    sudo ln -sf /usr/share/examples/pipewire/20-pipewire-pulse.conf \
+        /etc/pipewire/pipewire.conf.d/20-pipewire-pulse.conf
+    sudo ln -sf /usr/share/alsa/alsa.conf.d/50-pipewire.conf \
+        /etc/alsa/conf.d/50-pipewire.conf
+    sudo ln -sf /usr/share/alsa/alsa.conf.d/99-pipewire-default.conf \
+        /etc/alsa/conf.d/99-pipewire-default.conf
+
+    # Remove links created by older versions of this installer. PipeWire and
+    # WirePlumber must not run as system services.
+    local service
+    for service in pipewire wireplumber; do
+        [[ -L /var/service/$service ]] && sudo rm -f "/var/service/$service"
+    done
+
+    if [[ ! -e /var/service/rtkit ]]; then
+        sudo ln -s /etc/sv/rtkit /var/service/rtkit
+    fi
+    sudo sv up rtkit || true
+}
+
+configure_xinit() {
+    local xinitrc=$HOME/.xinitrc
+    local marker='# Managed by install-void-apps: session selector'
+    local legacy_marker='Usage: startx ~/.xinitrc {xfce|dwm}'
+
+    # Refresh files created by this or the previous version of the script, but
+    # do not replace a custom xinitrc.
+    if [[ ! -e $xinitrc ]] || grep -Fq "$marker" "$xinitrc" || \
+        grep -Fq "$legacy_marker" "$xinitrc"; then
+        cat > "$xinitrc" <<'EOF'
+#!/bin/sh
+# Managed by install-void-apps: session selector
+
+session=${1:-dwm}
+case "$session" in
+    xfce) export XDG_CURRENT_DESKTOP=XFCE ;;
+    dwm)  export XDG_CURRENT_DESKTOP=dwm ;;
+    *)
+        echo "Usage: startx ~/.xinitrc {xfce|dwm}" >&2
+        exit 2
+        ;;
+esac
+
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    exec dbus-run-session -- "$0" "$session"
+fi
+
+pipewire &
+children=$!
+
+cleanup() {
+    trap - EXIT HUP INT TERM
+    kill $children 2>/dev/null || true
+    wait $children 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+case "$session" in
+    xfce)
+        startxfce4
+        ;;
+    dwm)
+        if command -v dwmblocks >/dev/null 2>&1; then
+            dwmblocks &
+            children="$children $!"
+        fi
+        dwm
+        ;;
+esac
+EOF
+        chmod +x "$xinitrc"
+    else
+        echo "Keeping custom $xinitrc"
+    fi
+
+    mkdir -p "$HOME/.config/xdg-desktop-portal"
+    cat > "$HOME/.config/xdg-desktop-portal/portals.conf" <<'EOF'
+[preferred]
+default=gtk
+EOF
+}
+
+install_global_nerd_font() {
+    local archive=$1
+    local family=$2
+    local fontdir="/usr/local/share/fonts/NerdFonts/$archive"
+
+    # Check the global destination itself so a user-local copy does not cause
+    # the system-wide installation to be skipped.
+    if sudo find "$fontdir" -type f \
+        \( -name '*.ttf' -o -name '*.otf' \) -print -quit 2>/dev/null |
+        grep -q .; then
+        echo "$family is already installed globally"
+        return
+    fi
+
+    (
+        local tmp
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fL --retry 3 -o "$tmp/$archive.zip" \
+            "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/$archive.zip"
+        sudo install -d -m 755 "$fontdir"
+        sudo unzip -oq "$tmp/$archive.zip" -d "$fontdir"
+        sudo find "$fontdir" -type d -exec chmod 755 {} +
+        sudo find "$fontdir" -type f -exec chmod 644 {} +
+    )
+}
+
+install_suckless() {
+    local -a projects=(dmenu dwm st-reflow dwmblocks)
+    local project source url
+
+    mkdir -p "$SUCKLESS_DIR"
+    for project in "${projects[@]}"; do
+        source="$SUCKLESS_DIR/$project"
+        url="https://github.com/iveyj1/$project.git"
+        if [[ ! -e $source ]]; then
+            echo "Cloning $url"
+            git clone "$url" "$source"
+        fi
+        if [[ ! -d $source/.git || ! -f $source/Makefile ]]; then
+            echo "Invalid suckless repository: $source" >&2
+            return 1
+        fi
+
+        echo "Building $project from $source"
+        # Build the checked-in configuration as-is. In particular, do not edit
+        # config.h/config.def.h during installation.
+        make -C "$source" clean
+        make -C "$source" -j"$(getconf _NPROCESSORS_ONLN)"
+        sudo make -C "$source" install
+    done
+}
+
+install_tpm() {
+    local target=$HOME/.config/tmux/plugins/tpm
+    if [[ -d $target/.git ]]; then
+        git -C "$target" pull --ff-only
+    elif [[ ! -e $target ]]; then
+        mkdir -p "${target%/*}"
+        git clone https://github.com/tmux-plugins/tpm "$target"
+    else
+        echo "Not replacing non-Git path: $target" >&2
+    fi
+}
+
+configure_void_networking
+install_xlibre_repository
+install_package_groups
+configure_void_networking
+configure_services
+configure_console_font
+configure_xinit
+install_global_nerd_font DroidSansMono 'DroidSansM Nerd Font Mono'
+install_global_nerd_font JetBrainsMono 'JetBrainsMono Nerd Font Mono'
+sudo fc-cache -f /usr/local/share/fonts
+install_suckless
+install_tpm
+
+if [[ ! -f $HOME/.local/bin/venv/pyvenv.cfg ]]; then
+    python3 -m venv "$HOME/.local/bin/venv"
+fi
+
+if [[ ! -s $HOME/.ssh/id_ed25519.pub ]]; then
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+    if [[ -f $HOME/.ssh/id_ed25519 ]]; then
+        ssh-keygen -y -f "$HOME/.ssh/id_ed25519" > "$HOME/.ssh/id_ed25519.pub"
+    else
+        ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519"
+    fi
+    chmod 644 "$HOME/.ssh/id_ed25519.pub"
+fi
+
+if ((INSTALL_EXTRAS)); then
+    curl -fsSL https://pi.dev/install.sh | sh
+fi
+
+# Brave is not packaged by Void.
+sudo flatpak remote-add --if-not-exists flathub \
+    https://flathub.org/repo/flathub.flatpakrepo
+sudo flatpak install -y flathub com.brave.Browser
+if ((INSTALL_CAD)); then
+    sudo flatpak install -y flathub com.prusa3d.PrusaSlicer
+fi
+
+if [[ -n $VOID_GIT_USER_EMAIL ]]; then
+    git config --global user.email "$VOID_GIT_USER_EMAIL"
+fi
+if [[ -n $VOID_GIT_USER_NAME ]]; then
+    git config --global user.name "$VOID_GIT_USER_NAME"
+fi

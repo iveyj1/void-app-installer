@@ -1,0 +1,43 @@
+#!/usr/bin/env bash 
+set -euo pipefail
+
+# Trap ERR: Capture exit code and command immediately
+trap 'rc=$?; echo "ERROR: ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND} exited with status ${rc}" >&2; exit ${rc}' ERR
+trap 'echo "Interrupted" >&2; exit 130' INT
+
+prompt_yes_no() {
+    while true; do
+        read -p "$1 [y/N]: " response
+        case "$response" in
+            [Yy]*) return 0 ;; # Yes
+            [Nn]*) return 1 ;; # No
+            *) echo "Please answer yes (y) or no (n)." ;;
+        esac
+    done
+}
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+# Set default if void_list is unset or empty. By default, add ad-hoc packages
+# to the core group used by install-void-apps.
+void_list=${void_list:-"$SCRIPT_DIR/packages.d/core"}
+
+# Check if argument $1 is provided
+if [[ -z "${1:-}" ]]; then
+    echo "Usage: $0 <package_name>" >&2
+    exit 1
+fi
+
+# Quote variables to prevent word splitting
+if ! grep -q -- "$1" "$void_list"; then
+    if prompt_yes_no "$1 not in void-packages, add?"; then
+       echo $1 >> $void_list
+       echo "$1 added"
+    fi
+    if prompt_yes_no "install $1?"; then
+       sudo xbps-install -Su $1
+    fi
+else
+    echo "$1 already in void-packages"
+fi   
+
