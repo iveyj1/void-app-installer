@@ -169,7 +169,7 @@ configure_console_font() {
     # Persist the font for every virtual console. Merely calling setfont here
     # changes only the current console and is lost at reboot.
     if grep -q '^FONT=' "$config"; then
-        sudo sed -i 's/^FONT=.*/FONT="ter-124n"/' "$config"
+        sudo sed -i 's/^FONT=.*/FONT="ter-122n"/' "$config"
     else
         printf '\n# Installed by install-void-apps.\nFONT="ter-124n"\n' |
             sudo tee -a "$config" >/dev/null
