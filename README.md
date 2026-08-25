@@ -51,8 +51,9 @@ The installer configures the normal Void/runit network path instead of relying o
 
 - creates `/etc/wpa_supplicant/wpa_supplicant.conf` when `VOID_WIFI_SSID` and `VOID_WIFI_PSK` are set
 - detects the Wi-Fi interface, or uses `VOID_WIFI_IFACE`
-- writes `/etc/sv/wpa_supplicant/conf` with `WPA_INTERFACE`, `CONF_FILE`, and `DRIVER=nl80211`
-- enables `/var/service/wpa_supplicant` and `/var/service/dhcpcd`
+- leaves an already-working live network alone; if the network is down, starts Wi-Fi immediately with `wpa_supplicant`/`dhcpcd` before package installation when those tools are already available
+- writes `/etc/sv/wpa_supplicant/conf` with `WPA_INTERFACE` and `CONF_FILE`; `DRIVER` is written only when `VOID_WIFI_DRIVER` is set
+- enables and restarts `/var/service/wpa_supplicant` and `/var/service/dhcpcd` for the installed system
 - unblocks Wi-Fi, brings the interface up, and disables client Wi-Fi power save
 - writes `/etc/resolv.conf.head` so `dhcpcd` prepends a reliable DNS resolver
 - writes Intel Wi-Fi module options under `/etc/modprobe.d/iwlwifi-no-power-save.conf`
@@ -65,7 +66,9 @@ Useful environment variables:
 | `VOID_WIFI_PSK` | unset | Wi-Fi passphrase; never stored in this repo |
 | `VOID_WIFI_IFACE` | auto-detected | Override Wi-Fi interface, e.g. `wlp0s20f3` |
 | `VOID_WIFI_CONF` | `/etc/wpa_supplicant/wpa_supplicant.conf` | wpa_supplicant config path |
-| `VOID_WIFI_DNS` | `1.1.1.1` | DNS server prepended by `dhcpcd` |
+| `VOID_WIFI_DNS` | `1.1.1.1` | DNS server prepended by `dhcpcd` and ping target for bootstrap checks |
+| `VOID_WIFI_WAIT_SECONDS` | `30` | How long to wait for Wi-Fi reachability during bootstrap |
+| `VOID_WIFI_DRIVER` | unset | Optional `wpa_supplicant` driver override, e.g. `nl80211`; unset matches `~/setnetwork` default driver selection |
 | `VOID_GIT_USER_NAME` | unset | Optional global git `user.name` |
 | `VOID_GIT_USER_EMAIL` | unset | Optional global git `user.email` |
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'rc=$?; echo "install-void-apps failed at line $LINENO: $BASH_COMMAND (exit $rc)" >&2' ERR
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SUCKLESS_DIR=${SUCKLESS_DIR:-"$HOME/suckless"}
@@ -12,6 +13,8 @@ VOID_GIT_USER_EMAIL=${VOID_GIT_USER_EMAIL:-}
 VOID_WIFI_IFACE=${VOID_WIFI_IFACE:-}
 VOID_WIFI_CONF=${VOID_WIFI_CONF:-/etc/wpa_supplicant/wpa_supplicant.conf}
 VOID_WIFI_DNS=${VOID_WIFI_DNS:-1.1.1.1}
+VOID_WIFI_WAIT_SECONDS=${VOID_WIFI_WAIT_SECONDS:-30}
+VOID_WIFI_DRIVER=${VOID_WIFI_DRIVER:-}
 
 usage() {
     cat <<'EOF'
@@ -30,6 +33,7 @@ Wi-Fi bootstrap environment variables:
   VOID_WIFI_PSK    Passphrase for VOID_WIFI_SSID; not stored in this repository
   VOID_WIFI_IFACE  Override auto-detected Wi-Fi interface
   VOID_WIFI_DNS    Resolver prepended by dhcpcd, default: 1.1.1.1
+  VOID_WIFI_DRIVER Optional wpa_supplicant driver override, e.g. nl80211
   VOID_GIT_USER_NAME   Optional global git user.name
   VOID_GIT_USER_EMAIL  Optional global git user.email
 EOF
@@ -78,25 +82,19 @@ wpa_quote() {
     printf '"%s"' "$value"
 }
 
-configure_void_networking() {
-    local iface
-    iface=$(detect_wifi_iface || true)
-
-    sudo install -d -m 755 /etc/wpa_supplicant /etc/xbps.d
-
-    if [[ ! -s $VOID_WIFI_CONF && -n ${VOID_WIFI_SSID:-} && -n ${VOID_WIFI_PSK:-} ]]; then
-        echo "Creating $VOID_WIFI_CONF for SSID $VOID_WIFI_SSID"
-        if command -v wpa_passphrase >/dev/null 2>&1; then
-            {
-                printf '%s\n' \
-                    'ctrl_interface=/run/wpa_supplicant' \
-                    'ctrl_interface_group=wheel' \
-                    'update_config=1' \
-                    ''
-                printf '%s\n' "$VOID_WIFI_PSK" | wpa_passphrase "$VOID_WIFI_SSID"
-            } | sudo tee "$VOID_WIFI_CONF" >/dev/null
-        else
-            sudo tee "$VOID_WIFI_CONF" >/dev/null <<EOF
+write_wpa_config() {
+    echo "Writing $VOID_WIFI_CONF for SSID $VOID_WIFI_SSID"
+    if command -v wpa_passphrase >/dev/null 2>&1; then
+        {
+            printf '%s\n' \
+                'ctrl_interface=/run/wpa_supplicant' \
+                'ctrl_interface_group=wheel' \
+                'update_config=1' \
+                ''
+            printf '%s\n' "$VOID_WIFI_PSK" | wpa_passphrase "$VOID_WIFI_SSID"
+        } | sudo tee "$VOID_WIFI_CONF" >/dev/null
+    else
+        sudo tee "$VOID_WIFI_CONF" >/dev/null <<EOF
 ctrl_interface=/run/wpa_supplicant
 ctrl_interface_group=wheel
 update_config=1
@@ -106,19 +104,36 @@ network={
     psk=$(wpa_quote "$VOID_WIFI_PSK")
 }
 EOF
-        fi
-        sudo chmod 600 "$VOID_WIFI_CONF"
+    fi
+    sudo chmod 600 "$VOID_WIFI_CONF"
+}
+
+configure_void_networking() {
+    local iface
+    iface=$(detect_wifi_iface || true)
+
+    sudo install -d -m 755 /etc/wpa_supplicant
+
+    if [[ -n ${VOID_WIFI_SSID:-} && -n ${VOID_WIFI_PSK:-} ]]; then
+        write_wpa_config
     elif [[ ! -s $VOID_WIFI_CONF ]]; then
-        echo "No $VOID_WIFI_CONF yet; set VOID_WIFI_SSID and VOID_WIFI_PSK to let this installer create it."
+        if [[ -n ${VOID_WIFI_SSID:-}${VOID_WIFI_PSK:-} ]]; then
+            echo "Both VOID_WIFI_SSID and VOID_WIFI_PSK are required to create $VOID_WIFI_CONF." >&2
+        else
+            echo "No $VOID_WIFI_CONF yet; set VOID_WIFI_SSID and VOID_WIFI_PSK to let this installer create it."
+        fi
     fi
 
     if [[ -n $iface ]]; then
         if [[ -d /etc/sv/wpa_supplicant ]]; then
-            sudo tee /etc/sv/wpa_supplicant/conf >/dev/null <<EOF
-WPA_INTERFACE=$iface
-CONF_FILE=$VOID_WIFI_CONF
-DRIVER=nl80211
-EOF
+            {
+                printf 'WPA_INTERFACE=%s\n' "$iface"
+                printf 'CONF_FILE=%s\n' "$VOID_WIFI_CONF"
+                [[ -n $VOID_WIFI_DRIVER ]] && printf 'DRIVER=%s\n' "$VOID_WIFI_DRIVER"
+                printf 'OPTS="-c %s -i %s' "$VOID_WIFI_CONF" "$iface"
+                [[ -n $VOID_WIFI_DRIVER ]] && printf ' -D %s' "$VOID_WIFI_DRIVER"
+                printf '"\n'
+            } | sudo tee /etc/sv/wpa_supplicant/conf >/dev/null
         fi
         sudo rfkill unblock wifi 2>/dev/null || true
         sudo ip link set "$iface" up 2>/dev/null || true
@@ -142,13 +157,92 @@ options iwlmvm power_scheme=1
 EOF
 
     local service
+    sudo install -d -m 755 /var/service
     for service in wpa_supplicant dhcpcd; do
         if [[ -d /etc/sv/$service && ! -e /var/service/$service ]]; then
             sudo ln -s "/etc/sv/$service" "/var/service/$service"
         fi
     done
-    [[ -d /etc/sv/wpa_supplicant ]] && sudo sv up wpa_supplicant 2>/dev/null || true
-    [[ -d /etc/sv/dhcpcd ]] && sudo sv up dhcpcd 2>/dev/null || true
+}
+
+restart_network_services() {
+    [[ -d /etc/sv/wpa_supplicant && -d /etc/sv/dhcpcd ]] || return 1
+    echo "Restarting persistent Void networking services"
+    sudo pkill wpa_supplicant 2>/dev/null || true
+    sudo rm -rf /run/wpa_supplicant
+    sudo sv restart wpa_supplicant 2>/dev/null || sudo sv up wpa_supplicant 2>/dev/null || true
+    sleep 5
+    sudo sv restart dhcpcd 2>/dev/null || sudo sv up dhcpcd 2>/dev/null || true
+}
+
+network_reachable() {
+    ping -n -c 1 -W 2 "$VOID_WIFI_DNS" >/dev/null 2>&1
+}
+
+start_wifi_now() {
+    local iface=${1:-}
+    [[ -n $iface ]] || iface=$(detect_wifi_iface || true)
+    [[ -n $iface ]] || { echo "No Wi-Fi interface detected; cannot start Wi-Fi now."; return 1; }
+    [[ -s $VOID_WIFI_CONF ]] || { echo "Missing $VOID_WIFI_CONF; cannot start Wi-Fi now."; return 1; }
+    command -v wpa_supplicant >/dev/null 2>&1 || { echo "wpa_supplicant is not installed yet; cannot start Wi-Fi now."; return 1; }
+
+    echo "Starting Wi-Fi immediately on $iface"
+    sudo rfkill unblock wifi 2>/dev/null || true
+    [[ -d /etc/sv/wpa_supplicant ]] && sudo sv down wpa_supplicant 2>/dev/null || true
+    sudo pkill wpa_supplicant 2>/dev/null || true
+    sudo rm -rf /run/wpa_supplicant
+    sudo ip link set "$iface" down 2>/dev/null || true
+    sudo ip addr flush dev "$iface" 2>/dev/null || true
+    sudo ip link set "$iface" up
+    sudo iw dev "$iface" set power_save off 2>/dev/null || true
+
+    local -a wpa_args=(-B -i "$iface" -c "$VOID_WIFI_CONF")
+    [[ -n $VOID_WIFI_DRIVER ]] && wpa_args+=(-D "$VOID_WIFI_DRIVER")
+    if ! sudo wpa_supplicant "${wpa_args[@]}"; then
+        echo "wpa_supplicant failed to start on $iface using $VOID_WIFI_CONF" >&2
+        return 1
+    fi
+
+    sleep 5
+    if command -v dhcpcd >/dev/null 2>&1; then
+        sudo dhcpcd -n "$iface" 2>/dev/null || sudo dhcpcd "$iface" 2>/dev/null || true
+    else
+        echo "dhcpcd is not installed yet; DHCP cannot be requested by this installer." >&2
+    fi
+}
+
+wait_for_network() {
+    local waited=0
+    while (( waited < VOID_WIFI_WAIT_SECONDS )); do
+        if network_reachable; then
+            echo "Network is reachable."
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo "Network did not become reachable within ${VOID_WIFI_WAIT_SECONDS}s." >&2
+    return 1
+}
+
+bootstrap_wifi_for_installer() {
+    local iface
+    iface=$(detect_wifi_iface || true)
+    configure_void_networking
+
+    if network_reachable; then
+        echo "Network is already reachable; leaving the live Wi-Fi connection alone."
+        return 0
+    fi
+
+    if [[ -s $VOID_WIFI_CONF ]]; then
+        start_wifi_now "$iface"
+        wait_for_network
+        return
+    fi
+
+    echo "Network is not reachable and no Wi-Fi config is available." >&2
+    return 1
 }
 
 install_package_groups() {
@@ -341,10 +435,16 @@ install_tpm() {
     fi
 }
 
-configure_void_networking
+bootstrap_wifi_for_installer
 install_xlibre_repository
 install_package_groups
 configure_void_networking
+if network_reachable; then
+    echo "Network is still reachable after package installation; not restarting Wi-Fi services."
+else
+    restart_network_services || start_wifi_now "$(detect_wifi_iface || true)"
+    wait_for_network
+fi
 configure_services
 configure_console_font
 configure_xinit

@@ -27,15 +27,20 @@ VOID_WIFI_SSID='your ssid' VOID_WIFI_PSK='your passphrase' ./install-void-apps
 
 The installer writes `/etc/wpa_supplicant/wpa_supplicant.conf` only if it does not already exist and both variables are provided.
 
+When `VOID_WIFI_SSID` and `VOID_WIFI_PSK` are supplied, the installer rewrites `/etc/wpa_supplicant/wpa_supplicant.conf` from those values. This is intentional: explicit credentials on the installer command line mean “make the installed Wi-Fi config match these values,” even if a stale config already exists.
+
+Before the package transaction, it first checks whether the network is already reachable. If it is, the live connection is left alone. If not, it tries to bring Wi-Fi up immediately using the same sequence as the old manual `setnetwork` approach: unblock Wi-Fi, reset the interface, start `wpa_supplicant` in the background, request DHCP with `dhcpcd`, then wait briefly for reachability. This can only work if `wpa_supplicant` and `dhcpcd` are already present in the base/live environment.
+
 It writes `/etc/sv/wpa_supplicant/conf` when the service directory exists:
 
 ```sh
 WPA_INTERFACE=wlp0s20f3
 CONF_FILE=/etc/wpa_supplicant/wpa_supplicant.conf
-DRIVER=nl80211
+# DRIVER is omitted by default so wpa_supplicant chooses automatically.
+# Set VOID_WIFI_DRIVER=nl80211 if an explicit driver is desired.
 ```
 
-`VOID_WIFI_IFACE` can override interface detection.
+`VOID_WIFI_IFACE` can override interface detection. After installing packages, the installer restarts the persistent `wpa_supplicant` and `dhcpcd` runit services only if the network is not already reachable, so it does not tear down a working live connection.
 
 ## Manual repair
 

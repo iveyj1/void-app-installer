@@ -4,3 +4,6 @@
 .env
 secrets/
 tmp/
+*-invoke
+netrept-out-*
+*assoc*.out

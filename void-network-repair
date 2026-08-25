@@ -2,9 +2,49 @@
 # Manual Void Wi-Fi repair for wpa_supplicant + dhcpcd systems.
 # This is intentionally a repair tool, not the normal boot path.
 set -euo pipefail
+trap 'rc=$?; echo "void-network-repair failed at line $LINENO: $BASH_COMMAND (exit $rc)" >&2' ERR
 
 IFACE=${VOID_WIFI_IFACE:-${IFACE:-}}
 CONF=${VOID_WIFI_CONF:-/etc/wpa_supplicant/wpa_supplicant.conf}
+DRIVER=${VOID_WIFI_DRIVER:-}
+
+wpa_quote() {
+    local value=$1
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    printf '"%s"' "$value"
+}
+
+write_wpa_config() {
+    echo "Writing $CONF for SSID $VOID_WIFI_SSID"
+    sudo install -d -m 755 "${CONF%/*}"
+    if command -v wpa_passphrase >/dev/null 2>&1; then
+        {
+            printf '%s\n' \
+                'ctrl_interface=/run/wpa_supplicant' \
+                'ctrl_interface_group=wheel' \
+                'update_config=1' \
+                ''
+            printf '%s\n' "$VOID_WIFI_PSK" | wpa_passphrase "$VOID_WIFI_SSID"
+        } | sudo tee "$CONF" >/dev/null
+    else
+        sudo tee "$CONF" >/dev/null <<EOF
+ctrl_interface=/run/wpa_supplicant
+ctrl_interface_group=wheel
+update_config=1
+
+network={
+    ssid=$(wpa_quote "$VOID_WIFI_SSID")
+    psk=$(wpa_quote "$VOID_WIFI_PSK")
+}
+EOF
+    fi
+    sudo chmod 600 "$CONF"
+}
+
+if [[ -n ${VOID_WIFI_SSID:-} && -n ${VOID_WIFI_PSK:-} ]]; then
+    write_wpa_config
+fi
 
 if [[ -z $IFACE ]]; then
     if command -v iw >/dev/null 2>&1; then
@@ -28,11 +68,22 @@ sudo ip addr flush dev "$IFACE" 2>/dev/null || true
 sudo ip link set "$IFACE" up
 sudo iw dev "$IFACE" set power_save off 2>/dev/null || true
 
+if [[ -d /etc/sv/wpa_supplicant ]]; then
+    {
+        printf 'WPA_INTERFACE=%s\n' "$IFACE"
+        printf 'CONF_FILE=%s\n' "$CONF"
+        [[ -n $DRIVER ]] && printf 'DRIVER=%s\n' "$DRIVER"
+        printf 'OPTS="-c %s -i %s' "$CONF" "$IFACE"
+        [[ -n $DRIVER ]] && printf ' -D %s' "$DRIVER"
+        printf '"\n'
+    } | sudo tee /etc/sv/wpa_supplicant/conf >/dev/null
+fi
+sudo install -d -m 755 /var/service
 sudo ln -s /etc/sv/wpa_supplicant /var/service/wpa_supplicant 2>/dev/null || true
 sudo ln -s /etc/sv/dhcpcd /var/service/dhcpcd 2>/dev/null || true
-sudo sv start wpa_supplicant
+sudo sv restart wpa_supplicant || sudo sv start wpa_supplicant
 sleep 5
-sudo sv start dhcpcd
+sudo sv restart dhcpcd || sudo sv start dhcpcd
 sleep 10
 
 sudo sv status wpa_supplicant dhcpcd || true

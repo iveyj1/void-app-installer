@@ -1,0 +1,7 @@
+  ping -c 3 1.1.1.1 2>&1
+  sudo sv status wpa_supplicant dhcpcd
+  sudo ip -br link
+  sudo ip -br addr
+  sudo ip route
+  sudo iw dev wlp0s20f3 link
+  cat /etc/sv/wpa_supplicant/conf 2>/dev/null
