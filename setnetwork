@@ -1,0 +1,10 @@
+sudo sv down wpa_supplicant
+sudo pkill wpa_supplicant 
+sudo rm -rf /run/wpa_supplicant
+sudo ip link set wlp0s20f3 down
+sudo ip link set wlp0s20f3 up
+sudo wpa_passphrase "Pembleton" "widephoenix967" > /tmp/wifi.conf
+sudo wpa_supplicant -B -i wlp0s20f3 -c /tmp/wifi.conf -B nl880211
+sleep 10
+sudo iw dev wlp0s20f3 link
+
