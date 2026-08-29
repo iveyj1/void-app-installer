@@ -48,6 +48,7 @@ smartmontools
 playerctl
 jq
 ghostty
+gdu
 
 # Console and graphical environment for dwm
 terminus-font
