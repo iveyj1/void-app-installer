@@ -3,7 +3,7 @@ set -euo pipefail
 trap 'rc=$?; echo "install-void-apps failed at line $LINENO: $BASH_COMMAND (exit $rc)" >&2' ERR
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-SUCKLESS_DIR=${SUCKLESS_DIR:-"$HOME/suckless"}
+SUCKLESS_DIR=${SUCKLESS_DIR:-"$HOME/.local/src/"}
 INSTALL_XFCE=0
 INSTALL_CAD=0
 INSTALL_NETWORK=0
@@ -279,6 +279,11 @@ configure_services() {
         sudo ln -s /etc/sv/dbus /var/service/dbus
     fi
     sudo sv up dbus || true
+
+    if [[ -d /etc/sv/elogind && ! -e /var/service/elogind ]]; then
+        sudo ln -s /etc/sv/elogind /var/service/elogind
+    fi
+    sudo sv up elogind || true
 
     # PipeWire runs in the user's graphical session. These drop-ins make it
     # launch WirePlumber and the PulseAudio-compatible server with PipeWire.

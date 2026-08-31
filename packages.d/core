@@ -55,6 +55,7 @@ terminus-font
 vsv
 dbus
 dbus-x11
+elogind
 xfce-polkit
 flatpak
 xdg-desktop-portal
