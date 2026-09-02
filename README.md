@@ -27,7 +27,8 @@ Optional groups:
 - `--cad`: FreeCAD, KiCad, OpenSCAD, and PrusaSlicer Flatpak
 - `--network`: CIFS and Samba tools
 - `--extras`: cloc, expect, and Pi coding agent
-- `--all`: all optional groups
+- `--dell-hardware-tuning`: installs/enables a Dell laptop runit service for NVMe latency and keyboard backlight timeout tuning
+- `--all`: all non-hardware-specific optional groups
 
 ## Quick start on a fresh Void install
 
@@ -102,6 +103,7 @@ Group files are plain newline-separated package names. Blank lines and comments 
 |---|---|
 | `install-void-apps` | Main end-to-end workstation installer |
 | `install-void-package-groups` | Installs named package groups from `packages.d/` |
+| `dell-hardware-tuning/` | Optional Dell laptop boot-time hardware tuning service installed by `--dell-hardware-tuning` |
 | `add-package-void` | Helper to append a package to `packages.d/core` and optionally install it |
 | `void-network-repair` | Manual Wi-Fi/runit repair sequence |
 | `wifi-diag` | Captures Wi-Fi/network diagnostic snapshots |

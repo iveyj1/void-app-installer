@@ -1,0 +1,7 @@
+#!/bin/sh
+exec 2>&1
+
+/usr/local/sbin/dell-hardware-tuning || exit 1
+
+# Keep this one-shot service in the "up" state so runit does not rerun it.
+exec chpst -b dell-hardware-tuning pause

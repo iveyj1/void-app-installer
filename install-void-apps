@@ -8,6 +8,7 @@ INSTALL_XFCE=0
 INSTALL_CAD=0
 INSTALL_NETWORK=0
 INSTALL_EXTRAS=0
+INSTALL_DELL_HARDWARE_TUNING=0
 VOID_GIT_USER_NAME=${VOID_GIT_USER_NAME:-}
 VOID_GIT_USER_EMAIL=${VOID_GIT_USER_EMAIL:-}
 VOID_WIFI_IFACE=${VOID_WIFI_IFACE:-}
@@ -26,7 +27,9 @@ fonts, networking basics, and common utilities. Optional package groups:
   --cad        FreeCAD, KiCad, OpenSCAD, and PrusaSlicer
   --network    CIFS and Samba packages (services are not enabled)
   --extras     cloc, expect, and Pi coding agent
-  --all        Enable every optional group
+  --dell-hardware-tuning
+               Install/enable Dell laptop boot-time hardware tuning
+  --all        Enable every non-hardware-specific optional group
 
 Wi-Fi bootstrap environment variables:
   VOID_WIFI_SSID   Create /etc/wpa_supplicant/wpa_supplicant.conf for this SSID
@@ -45,6 +48,7 @@ while (($#)); do
         --cad) INSTALL_CAD=1 ;;
         --network) INSTALL_NETWORK=1 ;;
         --extras) INSTALL_EXTRAS=1 ;;
+        --dell-hardware-tuning) INSTALL_DELL_HARDWARE_TUNING=1 ;;
         --all) INSTALL_XFCE=1; INSTALL_CAD=1; INSTALL_NETWORK=1; INSTALL_EXTRAS=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -274,6 +278,30 @@ configure_console_font() {
     fi
 }
 
+install_dell_hardware_tuning() {
+    local source_dir=$SCRIPT_DIR/dell-hardware-tuning
+
+    [[ -x $source_dir/dell-hardware-tuning ]] || {
+        echo "Missing executable: $source_dir/dell-hardware-tuning" >&2
+        return 1
+    }
+    [[ -x $source_dir/runit/dell-hardware-tuning/run ]] || {
+        echo "Missing executable: $source_dir/runit/dell-hardware-tuning/run" >&2
+        return 1
+    }
+
+    sudo install -D -m 755 "$source_dir/dell-hardware-tuning" \
+        /usr/local/sbin/dell-hardware-tuning
+    sudo install -d -m 755 /etc/sv/dell-hardware-tuning
+    sudo install -m 755 "$source_dir/runit/dell-hardware-tuning/run" \
+        /etc/sv/dell-hardware-tuning/run
+    sudo install -d -m 755 /var/service
+    if [[ ! -e /var/service/dell-hardware-tuning ]]; then
+        sudo ln -s /etc/sv/dell-hardware-tuning /var/service/dell-hardware-tuning
+    fi
+    sudo sv up dell-hardware-tuning || true
+}
+
 configure_services() {
     if [[ ! -e /var/service/dbus ]]; then
         sudo ln -s /etc/sv/dbus /var/service/dbus
@@ -409,7 +437,7 @@ install_suckless() {
     mkdir -p "$SUCKLESS_DIR"
     for project in "${projects[@]}"; do
         source="$SUCKLESS_DIR/$project"
-        url="https://github.com/iveyj1/$project.git"
+        url="git@github.com:iveyj1/$project.git"
         if [[ ! -e $source ]]; then
             echo "Cloning $url"
             git clone "$url" "$source"
@@ -451,6 +479,9 @@ else
     wait_for_network
 fi
 configure_services
+if ((INSTALL_DELL_HARDWARE_TUNING)); then
+    install_dell_hardware_tuning
+fi
 configure_console_font
 configure_xinit
 install_global_nerd_font DroidSansMono 'DroidSansM Nerd Font Mono'
