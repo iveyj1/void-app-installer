@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'rc=$?; echo "setup-brother-hl2170w-printing failed at line $LINENO: $BASH_COMMAND (exit $rc)" >&2' ERR
+
+PRINTER_NAME=${PRINTER_NAME:-Brother_HL2170W}
+PRINTER_IP=${PRINTER_IP:-}
+DEVICE_URI=${DEVICE_URI:-}
+MAKE_DEFAULT=${MAKE_DEFAULT:-1}
+ENABLE_DISCOVERY=${ENABLE_DISCOVERY:-1}
+INSTALL_GUI=${INSTALL_GUI:-1}
+
+usage() {
+    cat <<'EOF'
+Usage: setup-brother-hl2170w-printing [OPTIONS]
+
+Installs CUPS and the Brother brlaser driver on Void Linux, enables services,
+and configures a Brother HL-2170W queue when a printer URI/IP can be found.
+
+Options:
+  --ip ADDRESS       Configure socket://ADDRESS:9100
+  --uri URI          Configure this CUPS device URI directly
+  --name NAME        CUPS queue name, default: Brother_HL2170W
+  --no-default       Do not set this printer as the default
+  --no-discovery     Do not install/enable avahi/cups-browsed discovery pieces
+  --no-gui           Do not install system-config-printer
+  -h, --help         Show help
+
+Environment variables mirror the options:
+  PRINTER_IP, DEVICE_URI, PRINTER_NAME, MAKE_DEFAULT=0,
+  ENABLE_DISCOVERY=0, INSTALL_GUI=0
+
+If no IP/URI is found, rerun with:
+  PRINTER_IP=192.168.1.x ./setup-brother-hl2170w-printing
+EOF
+}
+
+while (($#)); do
+    case $1 in
+        --ip) PRINTER_IP=${2:?--ip requires an address}; shift ;;
+        --uri) DEVICE_URI=${2:?--uri requires a URI}; shift ;;
+        --name) PRINTER_NAME=${2:?--name requires a queue name}; shift ;;
+        --no-default) MAKE_DEFAULT=0 ;;
+        --no-discovery) ENABLE_DISCOVERY=0 ;;
+        --no-gui) INSTALL_GUI=0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+require_void() {
+    if [[ ! -r /etc/os-release ]] || ! grep -qx 'ID="void"' /etc/os-release; then
+        echo "This script is intended for Void Linux." >&2
+        exit 1
+    fi
+}
+
+install_packages() {
+    local packages=(cups cups-filters brother-brlaser)
+
+    if [[ $ENABLE_DISCOVERY == 1 ]]; then
+        packages+=(avahi avahi-utils cups-browsed nss-mdns)
+    fi
+    if [[ $INSTALL_GUI == 1 ]]; then
+        packages+=(system-config-printer)
+    fi
+
+    sudo xbps-install -S "${packages[@]}"
+}
+
+enable_service() {
+    local service=$1
+    if [[ ! -d /etc/sv/$service ]]; then
+        echo "Service not available: $service" >&2
+        return 0
+    fi
+    if [[ ! -e /var/service/$service ]]; then
+        sudo ln -s "/etc/sv/$service" "/var/service/$service"
+    fi
+    if command -v sv >/dev/null 2>&1; then
+        sudo sv up "$service" || true
+    fi
+}
+
+enable_services() {
+    enable_service dbus
+    enable_service cupsd
+    if [[ $ENABLE_DISCOVERY == 1 ]]; then
+        enable_service avahi-daemon
+        enable_service cups-browsed
+    fi
+
+    if command -v sv >/dev/null 2>&1; then
+        sudo sv check cupsd >/dev/null || sleep 2
+    else
+        sleep 2
+    fi
+}
+
+find_brlaser_model() {
+    local model
+    model=$(lpinfo -m 2>/dev/null | awk '
+        BEGIN { IGNORECASE = 1 }
+        /brlaser/ && /HL[- ]?2170W/ { print $1; exit }
+        /brlaser/ && /2170/ { print $1; exit }
+    ' || true)
+
+    if [[ -z $model ]]; then
+        model=$(lpinfo -m 2>/dev/null | awk '
+            BEGIN { IGNORECASE = 1 }
+            /brlaser/ && /HL[- ]?2140/ { print $1; exit }
+            /brlaser/ && /HL[- ]?2150/ { print $1; exit }
+        ' || true)
+    fi
+
+    printf '%s\n' "$model"
+}
+
+uri_from_ip() {
+    local ip=$1
+    printf 'socket://%s:9100\n' "$ip"
+}
+
+find_printer_uri() {
+    if [[ -n $DEVICE_URI ]]; then
+        printf '%s\n' "$DEVICE_URI"
+        return 0
+    fi
+    if [[ -n $PRINTER_IP ]]; then
+        uri_from_ip "$PRINTER_IP"
+        return 0
+    fi
+
+    local uri
+    uri=$(lpinfo -v 2>/dev/null | awk '
+        BEGIN { IGNORECASE = 1 }
+        /Brother/ && /2170/ { print $2; exit }
+        /HL[- ]?2170W/ { print $2; exit }
+    ' || true)
+    if [[ -n $uri ]]; then
+        printf '%s\n' "$uri"
+        return 0
+    fi
+
+    if command -v ippfind >/dev/null 2>&1; then
+        uri=$(ippfind 2>/dev/null | awk '
+            BEGIN { IGNORECASE = 1 }
+            /Brother/ && /2170/ { print; exit }
+            /HL[- ]?2170W/ { print; exit }
+        ' || true)
+        if [[ -n $uri ]]; then
+            printf '%s\n' "$uri"
+            return 0
+        fi
+    fi
+
+    if command -v avahi-browse >/dev/null 2>&1; then
+        uri=$(avahi-browse -rt _printer._tcp _pdl-datastream._tcp 2>/dev/null | awk -F';' '
+            BEGIN { IGNORECASE = 1 }
+            /Brother/ && /2170/ && $8 != "" { print "socket://" $8 ":9100"; exit }
+            /HL[- ]?2170W/ && $8 != "" { print "socket://" $8 ":9100"; exit }
+        ' || true)
+        if [[ -n $uri ]]; then
+            printf '%s\n' "$uri"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+configure_queue() {
+    local uri=$1
+    local model=$2
+
+    if [[ -z $model ]]; then
+        echo "Could not find a brlaser HL-2170W model in lpinfo -m." >&2
+        echo "CUPS is installed/running; add the printer manually with system-config-printer or http://localhost:631." >&2
+        return 1
+    fi
+
+    sudo lpadmin -p "$PRINTER_NAME" -E -v "$uri" -m "$model"
+    sudo cupsenable "$PRINTER_NAME" || true
+    sudo cupsaccept "$PRINTER_NAME" || true
+
+    if [[ $MAKE_DEFAULT == 1 ]]; then
+        sudo lpadmin -d "$PRINTER_NAME"
+    fi
+
+    echo "Configured $PRINTER_NAME"
+    echo "  URI:   $uri"
+    echo "  Model: $model"
+}
+
+main() {
+    require_void
+    install_packages
+    enable_services
+
+    local model uri
+    model=$(find_brlaser_model)
+
+    if uri=$(find_printer_uri); then
+        configure_queue "$uri" "$model"
+    else
+        echo "CUPS and Brother HL-2170W driver are installed and services are enabled."
+        echo "Printer was not auto-detected. Find its IP from the printer/router, then run:"
+        echo "  PRINTER_IP=192.168.1.x $0"
+        echo "or add it manually at http://localhost:631 using socket://PRINTER_IP:9100"
+    fi
+}
+
+main "$@"
