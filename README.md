@@ -85,6 +85,13 @@ Diagnostics:
 ./wifi-diag
 ```
 
+Optional reconnect watchdog:
+
+```sh
+cd wifi-watchdog
+./install-wifi-watchdog
+```
+
 ## Package groups
 
 Package groups live in `packages.d/` and are installed by `install-void-package-groups`.
@@ -104,6 +111,7 @@ Group files are plain newline-separated package names. Blank lines and comments 
 | `install-void-apps` | Main end-to-end workstation installer |
 | `install-void-package-groups` | Installs named package groups from `packages.d/` |
 | `dell-hardware-tuning/` | Optional Dell laptop boot-time hardware tuning service installed by `--dell-hardware-tuning` |
+| `wifi-watchdog/` | Optional runit Wi-Fi reconnect watchdog service |
 | `add-package-void` | Helper to append a package to `packages.d/core` and optionally install it |
 | `void-network-repair` | Manual Wi-Fi/runit repair sequence |
 | `wifi-diag` | Captures Wi-Fi/network diagnostic snapshots |

@@ -1,0 +1,68 @@
+#!/bin/sh
+# Runit-friendly Wi-Fi reconnect watchdog for wpa_supplicant + dhcpcd.
+
+set -u
+
+CONFIG=${WIFI_WATCHDOG_CONFIG:-/etc/default/wifi-watchdog}
+[ -r "$CONFIG" ] && . "$CONFIG"
+
+IFACE=${IFACE:-wlp0s20f3}
+ROUTER=${ROUTER:-10.0.0.1}
+TARGET=${TARGET:-1.1.1.1}
+INTERVAL=${INTERVAL:-60}
+PING_TIMEOUT=${PING_TIMEOUT:-2}
+REASSOCIATE_AFTER=${REASSOCIATE_AFTER:-1}
+RESTART_AFTER=${RESTART_AFTER:-3}
+LOG=${LOG:-/var/log/wifi-watchdog.log}
+
+log() {
+    printf '%s wifi-watchdog[%s]: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "$$" "$*" >>"$LOG"
+}
+
+associated() {
+    iw dev "$IFACE" link 2>/dev/null | grep -q '^Connected to '
+}
+
+reachable() {
+    ping -n -I "$IFACE" -c 1 -W "$PING_TIMEOUT" "$TARGET" >/dev/null 2>&1 ||
+        ping -n -I "$IFACE" -c 1 -W "$PING_TIMEOUT" "$ROUTER" >/dev/null 2>&1
+}
+
+recover_light() {
+    log "reassociate iface=$IFACE"
+    rfkill unblock wifi 2>/dev/null || true
+    ip link set "$IFACE" up 2>/dev/null || true
+    iw dev "$IFACE" set power_save off 2>/dev/null || true
+    wpa_cli -i "$IFACE" reconnect >/dev/null 2>&1 || wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1 || true
+    dhcpcd -n "$IFACE" >/dev/null 2>&1 || true
+}
+
+recover_heavy() {
+    log "restart services iface=$IFACE"
+    sv restart wpa_supplicant >/dev/null 2>&1 || sv up wpa_supplicant >/dev/null 2>&1 || true
+    sleep 5
+    sv restart dhcpcd >/dev/null 2>&1 || sv up dhcpcd >/dev/null 2>&1 || true
+}
+
+failures=0
+log "started iface=$IFACE target=$TARGET router=$ROUTER interval=${INTERVAL}s"
+
+while :; do
+    if associated && reachable; then
+        [ "$failures" -gt 0 ] && log "recovered after $failures failed checks"
+        failures=0
+    else
+        failures=$((failures + 1))
+        link=$(iw dev "$IFACE" link 2>/dev/null | tr '\n' ';' | sed 's/;$//')
+        log "failed check count=$failures link=${link:-unknown}"
+
+        if [ "$failures" -ge "$RESTART_AFTER" ]; then
+            recover_heavy
+            failures=0
+        elif [ "$failures" -ge "$REASSOCIATE_AFTER" ]; then
+            recover_light
+        fi
+    fi
+
+    sleep "$INTERVAL"
+done

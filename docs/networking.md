@@ -72,6 +72,8 @@ Capture a snapshot quickly when the problem appears:
 ./wifi-diag
 ```
 
+The diagnostic script uses passwordless/non-interactive `sudo -n` for privileged checks when available, so running it from a user shell can still capture service status, `wpa_cli`, watchdog logs, and kernel Wi-Fi messages without hanging for a password.
+
 By default it uses:
 
 ```sh
@@ -118,6 +120,23 @@ Force reassociation and DHCP renew:
 sudo wpa_cli -i wlp0s20f3 reassociate
 sudo dhcpcd -n wlp0s20f3
 ```
+
+## Wi-Fi reconnect watchdog
+
+Install the optional watchdog service:
+
+```sh
+cd void-app-installer/wifi-watchdog
+./install-wifi-watchdog
+```
+
+It installs `/usr/local/sbin/wifi-watchdog`, creates `/etc/sv/wifi-watchdog`, enables `/var/service/wifi-watchdog`, and reads config from:
+
+```sh
+/etc/default/wifi-watchdog
+```
+
+The watchdog checks association and ping reachability. It first runs `wpa_cli reconnect`/`reassociate` plus `dhcpcd -n`; after repeated failures it restarts `wpa_supplicant` and `dhcpcd`. Logs go to `/var/log/wifi-watchdog.log`.
 
 ## Persistent DNS override
 

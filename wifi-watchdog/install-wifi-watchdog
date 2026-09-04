@@ -1,0 +1,48 @@
+#!/bin/sh
+# Install and enable the Wi-Fi reconnect watchdog as a Void/runit service.
+
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+: "${DEST_SBINDIR:=/usr/local/sbin}"
+: "${SERVICE_DIR:=/etc/sv/wifi-watchdog}"
+: "${ENABLED_DIR:=/var/service}"
+: "${CONFIG:=/etc/default/wifi-watchdog}"
+
+if [ "$(id -u)" -ne 0 ]; then
+    exec sudo "$0" "$@"
+fi
+
+install -d -m 755 "$DEST_SBINDIR" /etc/default "$SERVICE_DIR"
+install -m 755 "$ROOT/wifi-watchdog" "$DEST_SBINDIR/wifi-watchdog"
+install -m 755 "$ROOT/run" "$SERVICE_DIR/run"
+
+if [ ! -e "$CONFIG" ]; then
+    install -m 644 "$ROOT/wifi-watchdog.conf" "$CONFIG"
+    echo "created $CONFIG"
+else
+    echo "kept existing $CONFIG"
+fi
+
+touch /var/log/wifi-watchdog.log
+chmod 644 /var/log/wifi-watchdog.log
+
+install -d -m 755 "$ENABLED_DIR"
+ln -s "$SERVICE_DIR" "$ENABLED_DIR/wifi-watchdog" 2>/dev/null || true
+
+# runsvdir creates supervise/ asynchronously after the service appears in
+# /var/service.  Avoid noisy "supervise/control: file does not exist" warnings
+# on fresh installs by waiting briefly before talking to sv(8).
+i=0
+while [ ! -e "$SERVICE_DIR/supervise/ok" ] && [ ! -e "$ENABLED_DIR/wifi-watchdog/supervise/ok" ] && [ "$i" -lt 50 ]; do
+    i=$((i + 1))
+    sleep 0.1
+done
+
+if [ -e "$SERVICE_DIR/supervise/ok" ] || [ -e "$ENABLED_DIR/wifi-watchdog/supervise/ok" ]; then
+    sv restart wifi-watchdog 2>/dev/null || sv up wifi-watchdog 2>/dev/null || true
+    sv status wifi-watchdog || true
+else
+    echo "enabled $ENABLED_DIR/wifi-watchdog, but runsv has not picked it up yet" >&2
+    echo "check later with: sv status wifi-watchdog" >&2
+fi

@@ -26,12 +26,34 @@ run_sh() {
     printf '%s\n' "----- rc=$rc -----"
 }
 
-maybe_sudo() {
-    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-        sudo "$@"
+can_sudo() {
+    command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null
+}
+
+run_root() {
+    title=$1
+    shift
+    printf '\n===== %s =====\n' "$title"
+    if can_sudo; then
+        sudo -n "$@" 2>&1
     else
-        "$@"
+        "$@" 2>&1
     fi
+    rc=$?
+    printf '%s\n' "----- rc=$rc -----"
+}
+
+run_root_sh() {
+    title=$1
+    shift
+    printf '\n===== %s =====\n' "$title"
+    if can_sudo; then
+        sudo -n sh -c "$*" 2>&1
+    else
+        sh -c "$*" 2>&1
+    fi
+    rc=$?
+    printf '%s\n' "----- rc=$rc -----"
 }
 
 {
@@ -41,11 +63,16 @@ maybe_sudo() {
     echo "host=$(hostname)"
     echo "iface=$IFACE router=$ROUTER target=$TARGET"
     echo "user=$(id)"
+    if can_sudo; then
+        echo "sudo=available_noninteractive"
+    else
+        echo "sudo=unavailable_or_requires_password"
+    fi
 
     run uname -a
     run uptime
 
-    run_sh "rfkill" "rfkill list 2>/dev/null || true"
+    run_root_sh "rfkill" "rfkill list 2>/dev/null || true"
     run ip -br link
     run ip -br addr
     run ip route
@@ -63,10 +90,7 @@ maybe_sudo() {
 
     run_sh "processes" "ps -eo pid,ppid,stat,etime,args | grep -Ei 'wpa_supplicant|dhcpcd|wifi-watchdog|tlp|power-profiles|upower|powertop' | grep -v grep || true"
 
-    printf '\n===== runit service status =====\n'
-    maybe_sudo sv status wifi-watchdog wpa_supplicant dhcpcd 2>&1
-    rc=$?
-    printf '%s\n' "----- rc=$rc -----"
+    run_root "runit service status" sv status wifi-watchdog wpa_supplicant dhcpcd
 
     run_sh "ping router $ROUTER" "ping -n -I '$IFACE' -c 5 -W 2 '$ROUTER' 2>&1 || true"
     run_sh "ping internet $TARGET" "ping -n -I '$IFACE' -c 5 -W 2 '$TARGET' 2>&1 || true"
@@ -74,8 +98,9 @@ maybe_sudo() {
 
     run_sh "ARP/neigh" "ip neigh show dev '$IFACE' 2>/dev/null || true"
 
-    run_sh "wifi-watchdog log tail" "tail -80 /var/log/wifi-watchdog.log 2>/dev/null || true"
-    run_sh "kernel dmesg tail if permitted" "dmesg 2>/dev/null | grep -Ei 'wlp|wlan|iwlwifi|deauth|disassoc|firmware|wifi' | tail -80 || true"
+    run_root "wpa_cli status" wpa_cli -i "$IFACE" status
+    run_root_sh "wifi-watchdog log tail" "tail -80 /var/log/wifi-watchdog.log 2>/dev/null || true"
+    run_root_sh "kernel dmesg tail if permitted" "dmesg 2>/dev/null | grep -Ei 'wlp|wlan|iwlwifi|deauth|disassoc|firmware|wifi' | tail -80 || true"
 
     run_sh "pingstat recent summary" "test -x '$HOME/.local/bin/pingstat' && '$HOME/.local/bin/pingstat' show --last 30m 2>/dev/null || true"
 
