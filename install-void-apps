@@ -24,7 +24,7 @@ Usage: install-void-apps [OPTIONS]
 The default installation provides the command-line tools, dwm/XLibre, audio,
 fonts, networking basics, and common utilities. Optional package groups:
   --xfce       Xfce with the Plasma/Breeze appearance packages
-  --cad        FreeCAD, KiCad, OpenSCAD, and PrusaSlicer
+  --cad        FreeCAD, OpenSCAD, and KiCad/PrusaSlicer Flatpaks
   --network    CIFS and Samba packages (services are not enabled)
   --extras     cloc, expect, and Pi coding agent
   --dell-hardware-tuning
@@ -308,10 +308,13 @@ configure_services() {
     fi
     sudo sv up dbus || true
 
-    if [[ -d /etc/sv/elogind && ! -e /var/service/elogind ]]; then
-        sudo ln -s /etc/sv/elogind /var/service/elogind
+    # elogind is D-Bus activatable on Void. Supervising it with runit can race
+    # dbus during boot and produce repeated "already running" messages.
+    # Remove links created by older versions of this installer.
+    if [[ -L /var/service/elogind ]]; then
+        sudo sv down elogind 2>/dev/null || true
+        sudo rm -f /var/service/elogind
     fi
-    sudo sv up elogind || true
 
     # PipeWire runs in the user's graphical session. These drop-ins make it
     # launch WirePlumber and the PulseAudio-compatible server with PipeWire.
@@ -514,7 +517,7 @@ sudo flatpak remote-add --if-not-exists flathub \
     https://flathub.org/repo/flathub.flatpakrepo
 sudo flatpak install -y flathub com.brave.Browser
 if ((INSTALL_CAD)); then
-    sudo flatpak install -y flathub com.prusa3d.PrusaSlicer
+    sudo flatpak install -y flathub org.kicad.KiCad com.prusa3d.PrusaSlicer
 fi
 
 if [[ -n $VOID_GIT_USER_EMAIL ]]; then

@@ -1,4 +1,5 @@
 # Optional native CAD applications
 freecad
-kicad
+qt6-plugin-tls-openssl
+# qt6-plugin-tls-openssl is required by freecad
 openscad

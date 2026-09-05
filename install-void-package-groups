@@ -11,7 +11,7 @@ Usage: install-void-package-groups GROUP...
 Groups:
   core       Command-line tools, networking, dwm/XLibre, audio, and common utilities
   xfce       Xfce and the Breeze/Plasma-style desktop packages
-  cad        FreeCAD, KiCad, and OpenSCAD
+  cad        FreeCAD and OpenSCAD; install-void-apps adds KiCad as a Flatpak
   network    CIFS and Samba tools (does not enable or configure services)
   extras     cloc and expect; install-void-apps also installs Pi when selected
   all        All of the above

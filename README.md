@@ -24,7 +24,7 @@ Default install:
 Optional groups:
 
 - `--xfce`: Xfce plus Breeze/Plasma-style appearance packages
-- `--cad`: FreeCAD, KiCad, OpenSCAD, and PrusaSlicer Flatpak
+- `--cad`: FreeCAD, OpenSCAD, and KiCad/PrusaSlicer Flatpaks
 - `--network`: CIFS and Samba tools
 - `--extras`: cloc, expect, and Pi coding agent
 - `--dell-hardware-tuning`: installs/enables a Dell laptop runit service for NVMe latency and keyboard backlight timeout tuning

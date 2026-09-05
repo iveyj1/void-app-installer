@@ -22,7 +22,7 @@ samba  # optional file sharing tools
 
 - `core` - command-line tools, networking basics, dwm/XLibre, audio, fonts, build dependencies, and live-image tools
 - `xfce` - Xfce desktop plus Breeze/Plasma-style appearance packages
-- `cad` - FreeCAD, KiCad, OpenSCAD
+- `cad` - FreeCAD and OpenSCAD; `install-void-apps` installs KiCad as a Flatpak
 - `network` - CIFS and Samba packages
 - `extras` - miscellaneous tools; `install-void-apps` also installs Pi when this group is selected
 - `all` - expands to all groups above
