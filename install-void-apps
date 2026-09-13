@@ -4,6 +4,8 @@ trap 'rc=$?; echo "install-void-apps failed at line $LINENO: $BASH_COMMAND (exit
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SUCKLESS_DIR=${SUCKLESS_DIR:-"$HOME/.local/src/"}
+# Optional local session integration checkout; never fetched implicitly.
+DWM_SESSION_DIR=${DWM_SESSION_DIR:-"$SUCKLESS_DIR/mint-void-suckless"}
 INSTALL_XFCE=0
 INSTALL_CAD=0
 INSTALL_NETWORK=0
@@ -342,6 +344,13 @@ configure_services() {
 }
 
 configure_xinit() {
+    # Session code is maintained externally, not embedded in this installer.
+    if [[ ! -f $DWM_SESSION_DIR/Makefile || ! -f $DWM_SESSION_DIR/dwm-session ]]; then
+        echo "Session integration not found at $DWM_SESSION_DIR; leaving .xinitrc unchanged."
+        echo 'Install mint-void-suckless separately; see README.md.'
+        return
+    fi
+    sudo make -C "$DWM_SESSION_DIR" install
     local xinitrc=$HOME/.xinitrc
     local marker='# Managed by install-void-apps: session selector'
     local legacy_marker='Usage: startx ~/.xinitrc {xfce|dwm}'
@@ -354,44 +363,10 @@ configure_xinit() {
 #!/bin/sh
 # Managed by install-void-apps: session selector
 
-session=${1:-dwm}
-case "$session" in
-    xfce) export XDG_CURRENT_DESKTOP=XFCE ;;
-    dwm)  export XDG_CURRENT_DESKTOP=dwm ;;
-    *)
-        echo "Usage: startx ~/.xinitrc {xfce|dwm}" >&2
-        exit 2
-        ;;
-esac
-
-if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-    exec dbus-run-session -- "$0" "$session"
-fi
-
-pipewire &
-children=$!
-
-cleanup() {
-    trap - EXIT HUP INT TERM
-    kill $children 2>/dev/null || true
-    wait $children 2>/dev/null || true
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-case "$session" in
-    xfce)
-        startxfce4
-        ;;
-    dwm)
-        if command -v dwmblocks >/dev/null 2>&1; then
-            dwmblocks &
-            children="$children $!"
-        fi
-        dwm
-        ;;
+case "${1:-dwm}" in
+    dwm) exec /usr/local/bin/dwm-session ;;
+    xfce) exec startxfce4 ;;
+    *) echo 'Usage: startx ~/.xinitrc {xfce|dwm}' >&2; exit 2 ;;
 esac
 EOF
         chmod +x "$xinitrc"
@@ -399,11 +374,11 @@ EOF
         echo "Keeping custom $xinitrc"
     fi
 
+    # Scope portal preference to dwm; do not override stock desktop sessions.
     mkdir -p "$HOME/.config/xdg-desktop-portal"
-    cat > "$HOME/.config/xdg-desktop-portal/portals.conf" <<'EOF'
-[preferred]
-default=gtk
-EOF
+    if [[ ! -e $HOME/.config/xdg-desktop-portal/dwm-portals.conf ]]; then
+        printf '[preferred]\ndefault=gtk\n' > "$HOME/.config/xdg-desktop-portal/dwm-portals.conf"
+    fi
 }
 
 install_global_nerd_font() {
@@ -440,7 +415,7 @@ install_suckless() {
     mkdir -p "$SUCKLESS_DIR"
     for project in "${projects[@]}"; do
         source="$SUCKLESS_DIR/$project"
-        url="git@github.com:iveyj1/$project.git"
+        url="https://github.com/iveyj1/$project.git"
         if [[ ! -e $source ]]; then
             echo "Cloning $url"
             git clone "$url" "$source"

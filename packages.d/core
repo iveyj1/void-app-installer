@@ -46,6 +46,7 @@ tldr
 neovim
 smartmontools
 playerctl
+brightnessctl
 jq
 ghostty
 gdu
@@ -72,6 +73,7 @@ scrot
 libX11-devel
 libXft-devel
 libXinerama-devel
+libxcb-devel
 freetype-devel
 fontconfig-devel
 harfbuzz

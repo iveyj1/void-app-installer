@@ -118,7 +118,8 @@ Group files are plain newline-separated package names. Blank lines and comments 
 
 ## Customization knobs
 
-- `SUCKLESS_DIR`: destination for suckless source clones; default `~/suckless`
+- `SUCKLESS_DIR`: destination for suckless source clones; default `~/.local/src/`
+- `DWM_SESSION_DIR`: optional prepared `mint-void-suckless` checkout; default `$SUCKLESS_DIR/mint-void-suckless`. Its launcher is installed if present; no implicit clone or LightDM registration.
 - `VOID_WIFI_*`: networking bootstrap controls described above
 - `VOID_GIT_USER_NAME` / `VOID_GIT_USER_EMAIL`: optional global git identity
 - edit package group files under `packages.d/`
@@ -133,13 +134,33 @@ startx ~/.xinitrc dwm
 startx ~/.xinitrc xfce
 ```
 
-`install-void-apps` only refreshes a managed `.xinitrc` that it created previously. It should not overwrite a custom `.xinitrc`.
+`install-void-apps` only refreshes a managed `.xinitrc` that it created previously,
+and only when the separate `mint-void-suckless` session checkout is available.
+It does not overwrite a custom `.xinitrc`. Without that checkout, it leaves
+existing startup files alone and prints instructions.
+
+The generated selector now delegates dwm to `/usr/local/bin/dwm-session` and
+Xfce to stock `startxfce4`. D-Bus, optional dwmblocks, process cleanup and the
+Void audio policy are maintained in the separate launcher instead of an embedded
+installer heredoc. If Xfce previously relied on this heredoc for audio, enable
+PipeWire once in Xfce session autostart or your chosen user-service mechanism.
+The existing PipeWire drop-ins launch WirePlumber and pipewire-pulse with it.
+
+LightDM support is opt-in: install `lightdm` and an appropriate greeter (e.g.
+`lightdm-gtk3-greeter`), configure/enable its packaged runit service deliberately,
+and use the session checkout's `sudo make install-session`. This installer does
+not enable a display manager or alter stock session entries. Keep a getty on a
+spare VT for console login and recovery. See the session checkout README for
+staging, validation, installation and rollback.
+
+Portal preference is now scoped to `dwm-portals.conf`. Review any legacy global
+`~/.config/xdg-desktop-portal/portals.conf` manually; it is not removed.
 
 ## Notes and caveats
 
 - This is a personal installer, not a general Void distribution installer.
 - It assumes `sudo`, runit, and XBPS.
 - Several steps require internet access after networking is up.
-- `install-void-apps` installs Flatpak applications and pulls external code/fonts from GitHub.
+- `install-void-apps` installs Flatpak applications and pulls external code/fonts from GitHub. New application clones use HTTPS; existing Git remotes are left unchanged.
 - Pi is installed only when `--extras` or `--all` is selected.
 - The Intel Wi-Fi modprobe options are harmless on non-Intel systems but only affect Intel Wi-Fi after module reload/reboot.
