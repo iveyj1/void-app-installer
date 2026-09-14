@@ -5,7 +5,7 @@ trap 'rc=$?; echo "install-void-apps failed at line $LINENO: $BASH_COMMAND (exit
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SUCKLESS_DIR=${SUCKLESS_DIR:-"$HOME/.local/src/"}
 # Optional local session integration checkout; never fetched implicitly.
-DWM_SESSION_DIR=${DWM_SESSION_DIR:-"$SUCKLESS_DIR/mint-void-suckless"}
+DWM_SESSION_DIR=${DWM_SESSION_DIR:-"$SUCKLESS_DIR/configure-sl"}
 INSTALL_XFCE=0
 INSTALL_CAD=0
 INSTALL_NETWORK=0
@@ -347,10 +347,11 @@ configure_xinit() {
     # Session code is maintained externally, not embedded in this installer.
     if [[ ! -f $DWM_SESSION_DIR/Makefile || ! -f $DWM_SESSION_DIR/dwm-session ]]; then
         echo "Session integration not found at $DWM_SESSION_DIR; leaving .xinitrc unchanged."
-        echo 'Install mint-void-suckless separately; see README.md.'
+        echo 'Install configure-sl separately; see README.md.'
         return
     fi
     sudo make -C "$DWM_SESSION_DIR" install
+    printf 'User defaults are opt-in: make -C "%s" install-user-config (without sudo).\n' "$DWM_SESSION_DIR"
     local xinitrc=$HOME/.xinitrc
     local marker='# Managed by install-void-apps: session selector'
     local legacy_marker='Usage: startx ~/.xinitrc {xfce|dwm}'

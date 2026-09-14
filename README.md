@@ -119,7 +119,7 @@ Group files are plain newline-separated package names. Blank lines and comments 
 ## Customization knobs
 
 - `SUCKLESS_DIR`: destination for suckless source clones; default `~/.local/src/`
-- `DWM_SESSION_DIR`: optional prepared `mint-void-suckless` checkout; default `$SUCKLESS_DIR/mint-void-suckless`. Its launcher is installed if present; no implicit clone or LightDM registration.
+- `DWM_SESSION_DIR`: optional prepared `configure-sl` checkout; default `$SUCKLESS_DIR/configure-sl`. Its launcher is installed if present; no implicit clone or LightDM registration.
 - `VOID_WIFI_*`: networking bootstrap controls described above
 - `VOID_GIT_USER_NAME` / `VOID_GIT_USER_EMAIL`: optional global git identity
 - edit package group files under `packages.d/`
@@ -135,9 +135,21 @@ startx ~/.xinitrc xfce
 ```
 
 `install-void-apps` only refreshes a managed `.xinitrc` that it created previously,
-and only when the separate `mint-void-suckless` session checkout is available.
+and only when the separate `configure-sl` session checkout is available.
 It does not overwrite a custom `.xinitrc`. Without that checkout, it leaves
 existing startup files alone and prints instructions.
+
+Run `make -C "$DWM_SESSION_DIR" install-user-config` separately as your normal
+user (or `make -C ~/.local/src/configure-sl install-user-config` for the default).
+This creates missing machine.resources/session.conf defaults only; existing
+settings and symlinks are preserved. Edit fonts/DPI per machine afterward.
+Neither provisioning nor launcher installation silently creates user defaults.
+Shared `.Xresources` remains in the dotfile repository; configure-sl loads it
+before the machine-local resource file.
+
+The peer `../mint-app-installer` owns Mint provisioning. Package/service logic
+stays in these distro-specific repos, session assembly in configure-sl, and
+application build/install logic in each application's own checkout.
 
 The generated selector now delegates dwm to `/usr/local/bin/dwm-session` and
 Xfce to stock `startxfce4`. D-Bus, optional dwmblocks, process cleanup and the
