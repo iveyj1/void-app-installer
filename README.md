@@ -126,13 +126,18 @@ Group files are plain newline-separated package names. Blank lines and comments 
 
 ## After installation
 
-Start a graphical session with:
+Install the shared dwm session launcher from the adjacent `configure-sl`
+checkout, then start X:
 
 ```sh
+sudo make -C ~/.local/src/configure-sl install-launcher
 startx ~/.xinitrc dwm
 # or
 startx ~/.xinitrc xfce
 ```
+
+Use `startx`, not `dwm-session` directly: `startx` creates the X display and the
+managed `.xinitrc` delegates its dwm branch to the launcher.
 
 `install-void-apps` only refreshes a managed `.xinitrc` that it created previously,
 and only when the separate `configure-sl` session checkout is available.
@@ -160,7 +165,8 @@ The existing PipeWire drop-ins launch WirePlumber and pipewire-pulse with it.
 
 LightDM support is opt-in: install `lightdm` and an appropriate greeter (e.g.
 `lightdm-gtk3-greeter`), configure/enable its packaged runit service deliberately,
-and use the session checkout's `sudo make install-session`. This installer does
+and use the session checkout's optional `sudo make install-lightdm-session`.
+This installer does
 not enable a display manager or alter stock session entries. Keep a getty on a
 spare VT for console login and recovery. See the session checkout README for
 staging, validation, installation and rollback.

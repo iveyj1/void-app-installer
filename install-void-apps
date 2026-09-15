@@ -350,7 +350,7 @@ configure_xinit() {
         echo 'Install configure-sl separately; see README.md.'
         return
     fi
-    sudo make -C "$DWM_SESSION_DIR" install
+    sudo make -C "$DWM_SESSION_DIR" install-launcher
     printf 'User defaults are opt-in: make -C "%s" install-user-config (without sudo).\n' "$DWM_SESSION_DIR"
     local xinitrc=$HOME/.xinitrc
     local marker='# Managed by install-void-apps: session selector'
