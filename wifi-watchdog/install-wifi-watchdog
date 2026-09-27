@@ -13,6 +13,20 @@ if [ "$(id -u)" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
+for cmd in timeout svlogd wpa_cli iw ip ping dhcpcd; do
+    command -v "$cmd" >/dev/null || { echo "missing command: $cmd" >&2; exit 1; }
+done
+BACKUP=/var/backups/wifi-watchdog/$(date '+%Y%m%d-%H%M%S')-$$
+install -d -m 700 "$BACKUP"
+for path in "$CONFIG" "$DEST_SBINDIR/wifi-watchdog" "$SERVICE_DIR/run" \
+    /etc/sv/wpa_supplicant/log/run /etc/sv/dhcpcd/log/run; do
+    if [ -f "$path" ]; then
+        install -d "$BACKUP$(dirname "$path")"
+        cp -p "$path" "$BACKUP$path"
+    fi
+done
+echo "backups: $BACKUP"
+
 install -d -m 755 "$DEST_SBINDIR" /etc/default "$SERVICE_DIR"
 install -m 755 "$ROOT/wifi-watchdog" "$DEST_SBINDIR/wifi-watchdog"
 install -m 755 "$ROOT/run" "$SERVICE_DIR/run"
@@ -21,11 +35,31 @@ if [ ! -e "$CONFIG" ]; then
     install -m 644 "$ROOT/wifi-watchdog.conf" "$CONFIG"
     echo "created $CONFIG"
 else
-    echo "kept existing $CONFIG"
+    # Migrate the old default; retain interface, log path and custom settings.
+    awk '/^INTERVAL=60$/ { print "INTERVAL=10"; next }
+         /^(REASSOCIATE_AFTER|RESTART_AFTER)=/ { next }
+         { print }' "$CONFIG" > "$BACKUP/config.new"
+    install -m 644 "$BACKUP/config.new" "$CONFIG"
+    echo "migrated legacy defaults in $CONFIG"
 fi
 
 touch /var/log/wifi-watchdog.log
-chmod 644 /var/log/wifi-watchdog.log
+chmod 600 /var/log/wifi-watchdog.log
+
+# Replace vlogger (no persistent syslog here) with bounded, timestamped logs.
+# Restart only the log services, not the network services themselves.
+for service in wpa_supplicant dhcpcd; do
+    logdir=/var/log/$service
+    install -d -m 700 "$logdir"
+    if [ -f "$logdir/config" ]; then
+        install -d "$BACKUP$logdir"
+        cp -p "$logdir/config" "$BACKUP$logdir/config"
+    fi
+    printf 's1048576\nn5\n' > "$logdir/config"
+    printf '#!/bin/sh\numask 077\nexec svlogd -tt %s\n' "$logdir" > "/etc/sv/$service/log/run"
+    chmod 755 "/etc/sv/$service/log/run"
+    sv -w 5 restart "/var/service/$service/log"
+done
 
 install -d -m 755 "$ENABLED_DIR"
 ln -s "$SERVICE_DIR" "$ENABLED_DIR/wifi-watchdog" 2>/dev/null || true
@@ -40,8 +74,8 @@ while [ ! -e "$SERVICE_DIR/supervise/ok" ] && [ ! -e "$ENABLED_DIR/wifi-watchdog
 done
 
 if [ -e "$SERVICE_DIR/supervise/ok" ] || [ -e "$ENABLED_DIR/wifi-watchdog/supervise/ok" ]; then
-    sv restart wifi-watchdog 2>/dev/null || sv up wifi-watchdog 2>/dev/null || true
-    sv status wifi-watchdog || true
+    sv -w 10 restart "$ENABLED_DIR/wifi-watchdog"
+    sv status "$ENABLED_DIR/wifi-watchdog"
 else
     echo "enabled $ENABLED_DIR/wifi-watchdog, but runsv has not picked it up yet" >&2
     echo "check later with: sv status wifi-watchdog" >&2

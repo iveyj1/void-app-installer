@@ -1,9 +1,8 @@
 #!/bin/sh
-# Boot-time settings for this Dell laptop.
+# Boot-time NVMe latency settings for this Dell laptop.
 set -u
 
 NVME_LATENCY_US=${NVME_LATENCY_US:-11000}
-KEYBOARD_TIMEOUT=${KEYBOARD_TIMEOUT:-60s}
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "dell-hardware-tuning: must run as root" >&2
@@ -16,6 +15,16 @@ write_verify() {
     path=$1
     value=$2
     label=$3
+
+    actual=$(cat "$path") || {
+        echo "dell-hardware-tuning: failed to read $path" >&2
+        failures=$((failures + 1))
+        return
+    }
+
+    if [ "$actual" = "$value" ]; then
+        return
+    fi
 
     if ! printf '%s\n' "$value" > "$path"; then
         echo "dell-hardware-tuning: failed to write $path" >&2
@@ -47,18 +56,5 @@ done
 
 [ "$found_nvme" = true ] || \
     echo "dell-hardware-tuning: no NVMe latency control found; skipping" >&2
-
-keyboard=/sys/class/leds/dell::kbd_backlight/stop_timeout
-tries=0
-while [ ! -e "$keyboard" ] && [ "$tries" -lt 30 ]; do
-    sleep 1
-    tries=$((tries + 1))
-done
-
-if [ -e "$keyboard" ]; then
-    write_verify "$keyboard" "$KEYBOARD_TIMEOUT" ''
-else
-    echo "dell-hardware-tuning: keyboard timeout control not found; skipping" >&2
-fi
 
 exit "$failures"

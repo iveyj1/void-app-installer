@@ -1,68 +1,158 @@
 #!/bin/sh
-# Runit-friendly Wi-Fi reconnect watchdog for wpa_supplicant + dhcpcd.
-
+# Staged recovery for Void/runit. No network changes while association is healthy.
 set -u
-
+umask 077
 CONFIG=${WIFI_WATCHDOG_CONFIG:-/etc/default/wifi-watchdog}
-[ -r "$CONFIG" ] && . "$CONFIG"
-
+[ ! -r "$CONFIG" ] || . "$CONFIG"
 IFACE=${IFACE:-wlp0s20f3}
-ROUTER=${ROUTER:-10.0.0.1}
-TARGET=${TARGET:-1.1.1.1}
-INTERVAL=${INTERVAL:-60}
+INTERVAL=${INTERVAL:-10}
+GRACE=${GRACE:-10}
 PING_TIMEOUT=${PING_TIMEOUT:-2}
-REASSOCIATE_AFTER=${REASSOCIATE_AFTER:-1}
-RESTART_AFTER=${RESTART_AFTER:-3}
+COMMAND_TIMEOUT=${COMMAND_TIMEOUT:-8}
+RESTART_COOLDOWN=${RESTART_COOLDOWN:-120}
+MAX_BACKOFF=${MAX_BACKOFF:-900}
+STABLE_RESET=${STABLE_RESET:-300}
 LOG=${LOG:-/var/log/wifi-watchdog.log}
+LOG_MAX_BYTES=${LOG_MAX_BYTES:-1048576}
+
+for value in "$INTERVAL" "$PING_TIMEOUT" "$COMMAND_TIMEOUT" "$RESTART_COOLDOWN" \
+    "$MAX_BACKOFF" "$STABLE_RESET" "$LOG_MAX_BYTES"; do
+    case "$value" in ''|*[!0-9]*|0) echo "invalid positive numeric setting: $value" >&2; exit 1 ;; esac
+done
+case "$GRACE" in ''|*[!0-9]*) echo 'invalid GRACE' >&2; exit 1 ;; esac
 
 log() {
-    printf '%s wifi-watchdog[%s]: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "$$" "$*" >>"$LOG"
+    if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -ge "$LOG_MAX_BYTES" ]; then
+        mv -f "$LOG.1" "$LOG.2" 2>/dev/null || :
+        mv -f "$LOG" "$LOG.1"
+    fi
+    printf '%s wifi-watchdog[%s]: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')" "$$" "$*" >> "$LOG"
 }
 
-associated() {
-    iw dev "$IFACE" link 2>/dev/null | grep -q '^Connected to '
+command_log() {
+    output=$(timeout "$COMMAND_TIMEOUT" "$@" 2>&1)
+    rc=$?
+    log "command=$* rc=$rc response=$(printf '%s' "$output" | tr '\n' ';')"
+    # wpa_cli can return exit zero while reporting FAIL.
+    [ "$rc" -eq 0 ] && ! printf '%s\n' "$output" | grep -q '^FAIL'
 }
 
-reachable() {
-    ping -n -I "$IFACE" -c 1 -W "$PING_TIMEOUT" "$TARGET" >/dev/null 2>&1 ||
-        ping -n -I "$IFACE" -c 1 -W "$PING_TIMEOUT" "$ROUTER" >/dev/null 2>&1
-}
-
-recover_light() {
-    log "reassociate iface=$IFACE"
-    rfkill unblock wifi 2>/dev/null || true
-    ip link set "$IFACE" up 2>/dev/null || true
-    iw dev "$IFACE" set power_save off 2>/dev/null || true
-    wpa_cli -i "$IFACE" reconnect >/dev/null 2>&1 || wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1 || true
-    dhcpcd -n "$IFACE" >/dev/null 2>&1 || true
-}
-
-recover_heavy() {
-    log "restart services iface=$IFACE"
-    sv restart wpa_supplicant >/dev/null 2>&1 || sv up wpa_supplicant >/dev/null 2>&1 || true
-    sleep 5
-    sv restart dhcpcd >/dev/null 2>&1 || sv up dhcpcd >/dev/null 2>&1 || true
-}
-
-failures=0
-log "started iface=$IFACE target=$TARGET router=$ROUTER interval=${INTERVAL}s"
-
-while :; do
-    if associated && reachable; then
-        [ "$failures" -gt 0 ] && log "recovered after $failures failed checks"
-        failures=0
+inspect() {
+    status=$(timeout "$COMMAND_TIMEOUT" wpa_cli -i "$IFACE" status 2>&1)
+    status_rc=$?
+    state=$(printf '%s\n' "$status" | awk -F= '$1 == "wpa_state" {print $2}')
+    state=${state:-UNKNOWN}
+    link=$(timeout "$COMMAND_TIMEOUT" iw dev "$IFACE" link 2>&1)
+    if ! printf '%s\n' "$link" | grep -q '^Connected to '; then
+        health=disconnected
+    elif ! ip -4 -o addr show dev "$IFACE" scope global | grep -q ' inet '; then
+        health=no-ip
     else
-        failures=$((failures + 1))
-        link=$(iw dev "$IFACE" link 2>/dev/null | tr '\n' ';' | sed 's/;$//')
-        log "failed check count=$failures link=${link:-unknown}"
-
-        if [ "$failures" -ge "$RESTART_AFTER" ]; then
-            recover_heavy
-            failures=0
-        elif [ "$failures" -ge "$REASSOCIATE_AFTER" ]; then
-            recover_light
+        gateway=$(ip -4 route show default dev "$IFACE" | awk '/via/ {print $3; exit}')
+        if [ -z "$gateway" ]; then
+            health=no-route
+        elif ping -n -I "$IFACE" -c 1 -W "$PING_TIMEOUT" "$gateway" >/dev/null 2>&1; then
+            health=healthy
+        else
+            # A router may filter ICMP; this alone never triggers a restart.
+            health=gateway-unreachable
         fi
     fi
+}
 
-    sleep "$INTERVAL"
-done
+snapshot() {
+    log "health=$health state=$state status_rc=$status_rc status=$(printf '%s' "$status" | tr '\n' ';') link=$(printf '%s' "$link" | tr '\n' ';')"
+}
+
+init_state() {
+    previous=unknown
+    since=0
+    stage=0
+    next_action=0
+    next_restart=0
+    backoff=$RESTART_COOLDOWN
+    stable_since=0
+    progress_waited=0
+}
+
+restart_service() {
+    if [ "$now" -lt "$next_restart" ]; then
+        log "restart deferred service=$1 cooldown_remaining=$((next_restart - now))s"
+        next_action=$next_restart
+        return
+    fi
+    command_log sv -w 5 restart "$1" || :
+    next_restart=$((now + backoff))
+    log "restart requested service=$1 next_restart_in=${backoff}s; awaiting verified recovery"
+    backoff=$((backoff * 2))
+    [ "$backoff" -le "$MAX_BACKOFF" ] || backoff=$MAX_BACKOFF
+    next_action=$next_restart
+}
+
+tick() {
+    now=$(date +%s)
+    inspect
+    if [ "$health" != "$previous" ]; then
+        snapshot
+        stage=0
+        progress_waited=0
+        next_action=$((now + GRACE))
+        previous=$health
+    fi
+    case "$health" in
+        healthy)
+            if [ "$since" -ne 0 ]; then
+                log "recovered verified downtime=$((now - since))s"
+                since=0
+            fi
+            [ "$stable_since" -ne 0 ] || stable_since=$now
+            if [ "$((now - stable_since))" -ge "$STABLE_RESET" ]; then
+                backoff=$RESTART_COOLDOWN
+                next_restart=0
+            fi
+            return ;;
+        gateway-unreachable)
+            # Preserve existing sessions: do not treat an upstream outage as Wi-Fi failure.
+            stable_since=0
+            return ;;
+    esac
+    stable_since=0
+    [ "$since" -ne 0 ] || since=$now
+    [ "$now" -ge "$next_action" ] || return
+    snapshot
+    next_action=$((now + INTERVAL))
+    case "$health" in
+        disconnected)
+            # Give an in-progress handshake one additional interval, not an infinite grace.
+            case "$state" in
+                ASSOCIATING|ASSOCIATED|AUTHENTICATING|4WAY_HANDSHAKE|GROUP_HANDSHAKE)
+                    if [ "$progress_waited" -eq 0 ]; then
+                        progress_waited=1
+                        log "authentication in progress; granting one extra interval"
+                        return
+                    fi ;;
+            esac
+            case "$stage" in
+                0) command_log wpa_cli -i "$IFACE" reconnect || :; stage=1 ;;
+                1) command_log wpa_cli -i "$IFACE" reassociate || :; stage=2 ;;
+                *) restart_service wpa_supplicant ;;
+            esac ;;
+        no-ip|no-route)
+            if [ "$stage" -eq 0 ]; then
+                command_log dhcpcd -n "$IFACE" || :
+                stage=1
+            else
+                restart_service dhcpcd
+            fi ;;
+    esac
+}
+
+main() {
+    init_state
+    log "started iface=$IFACE interval=${INTERVAL}s grace=${GRACE}s cooldown=${RESTART_COOLDOWN}s"
+    while :; do
+        tick
+        sleep "$INTERVAL"
+    done
+}
+main

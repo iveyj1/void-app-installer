@@ -27,7 +27,7 @@ Optional groups:
 - `--cad`: FreeCAD, OpenSCAD, and KiCad/PrusaSlicer Flatpaks
 - `--network`: CIFS and Samba tools
 - `--extras`: cloc, expect, and Pi coding agent
-- `--dell-hardware-tuning`: installs/enables a Dell laptop runit service for NVMe latency and keyboard backlight timeout tuning
+- `--dell-hardware-tuning`: installs/enables a Dell laptop runit service for boot-time NVMe latency tuning
 - `--all`: all non-hardware-specific optional groups
 
 ## Quick start on a fresh Void install
@@ -45,6 +45,25 @@ VOID_GIT_USER_NAME='Your Name' VOID_GIT_USER_EMAIL='you@example.com' \
 If `git` is not available yet but `curl` or `wget` is, download the repo archive from GitHub after creating it and run the same installer from the extracted directory.
 
 Do **not** commit Wi-Fi passphrases. Pass them only through environment variables or configure `/etc/wpa_supplicant/wpa_supplicant.conf` manually.
+
+## Brightness key ownership
+
+The installer runs `configure-acpi-brightness` to disable only the stock
+`video/brightnessup` and `video/brightnessdown` actions in `/etc/acpi/handler.sh`.
+The desktop (dwm/Xfce) owns these keys; otherwise acpid can race the desktop and
+cause brightness flashes. Power/lid actions and the acpid service are unchanged.
+Brightness keys outside a desktop no longer receive the stock ACPI adjustment.
+
+Apply independently on an existing installation:
+
+```sh
+sudo python3 ./configure-acpi-brightness
+```
+
+No service restart is needed. The helper is idempotent, skips an absent handler,
+backs up the original as `/etc/acpi/handler.sh.before-desktop-brightness`, and
+refuses unrecognized/custom brightness handlers rather than overwriting them.
+Review any XBPS configuration-file updates to preserve this policy.
 
 ## Networking bootstrap
 

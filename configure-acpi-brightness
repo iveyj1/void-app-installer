@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Leave brightness keys to the desktop, preserving other Void ACPI actions."""
+import re
+import shutil
+from pathlib import Path
+
+
+REPLACEMENT = '''    video/brightnessdown|video/brightnessup)
+        # Brightness keys are handled by the desktop (dwm/Xfce).
+        ;;
+'''
+PATTERN = re.compile(
+    r'^    video/brightnessdown\)\n        step_backlight -\n        ;;\n'
+    r'    video/brightnessup\)\n        step_backlight \+\n        ;;\n',
+    re.MULTILINE,
+)
+
+
+def configure(path):
+    if not path.exists():
+        print(f'{path}: absent; nothing to configure')
+        return
+    original = path.read_text()
+    if REPLACEMENT in original:
+        print(f'{path}: desktop already owns brightness keys')
+        return
+    updated, count = PATTERN.subn(REPLACEMENT, original)
+    if count != 1:
+        raise SystemExit(f'{path}: unrecognized brightness handlers; leaving unchanged')
+    backup = path.with_name(path.name + '.before-desktop-brightness')
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    # Write in place to preserve owner and permissions of the packaged config.
+    path.write_text(updated)
+    print(f'{path}: disabled ACPI brightness actions; backup: {backup}')
+
+
+if __name__ == '__main__':
+    configure(Path('/etc/acpi/handler.sh'))

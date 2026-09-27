@@ -96,6 +96,7 @@ wireplumber-elogind
 rtkit
 sof-firmware
 libspa-bluetooth
+mpv
 
 # Live-image tools
 xorriso

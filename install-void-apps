@@ -458,6 +458,8 @@ else
     wait_for_network
 fi
 configure_services
+# acpid's stock brightness actions race desktop brightness key bindings.
+sudo python3 "$SCRIPT_DIR/configure-acpi-brightness"
 if ((INSTALL_DELL_HARDWARE_TUNING)); then
     install_dell_hardware_tuning
 fi
