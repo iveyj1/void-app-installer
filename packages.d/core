@@ -26,6 +26,7 @@ autoconf
 automake
 python3
 ncurses
+rsync
 
 # Terminal tools and utilities
 ranger
